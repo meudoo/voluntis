@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "render-build": "npm install"
+    "render-build": "npm install --build-from-source=sqlite3"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +15,7 @@
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "sqlite3": "^6.0.1"
+    "sqlite3": "^5.1.7"
   },
   "engines": {
     "node": ">=20 <21"

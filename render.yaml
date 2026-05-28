@@ -6,9 +6,11 @@ services:
     runtime: node
     plan: free
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm run render-build
     startCommand: node server.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "20"
+      - key: npm_config_build_from_source
+        value: "sqlite3"
