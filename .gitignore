@@ -1,0 +1,12 @@
+node_modules/
+backend/node_modules/
+netlify-publish/
+deploy-site/
+backend/database.sqlite
+.env
+.env.*
+*.log
+.DS_Store
+~$*
+*.tmp
+~WRL*

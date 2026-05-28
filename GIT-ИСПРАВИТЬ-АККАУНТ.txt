@@ -1,0 +1,59 @@
+══════════════════════════════════════════════════════════════
+  Почему появляется amlagach и как перейти на meudoo
+══════════════════════════════════════════════════════════════
+
+ПРИЧИНЫ:
+1. remote origin был: github.com/amlagach@gmail.com/... (неверный URL)
+2. В Windows сохранён старый пароль GitHub для amlagach
+3. git commit не выполнился — не было user.name / user.email
+4. git push без коммита → ошибка "main does not match any"
+
+ПРАВИЛЬНЫЙ URL репозитория:
+  https://github.com/meudoo/voluntis.git
+  (логин meudoo, НЕ email в адресе)
+
+──────────────────────────────────────────────────────────────
+ШАГ 1. Имя и email для Git (один раз)
+──────────────────────────────────────────────────────────────
+
+В PowerShell (подставьте свой email от GitHub meudoo):
+
+  $env:Path += ";C:\Program Files\Git\cmd"
+  git config --global user.name "meudoo"
+  git config --global user.email "ВАШ_EMAIL@example.com"
+
+──────────────────────────────────────────────────────────────
+ШАГ 2. Удалить старый логин amlagach из Windows
+──────────────────────────────────────────────────────────────
+
+1. Win + R → введите: control /name Microsoft.CredentialManager
+2. Учётные данные Windows
+3. Найдите записи:
+   - git:https://github.com
+   - github.com
+4. Удалить (Remove) те, что связаны с amlagach
+5. Закройте окно
+
+──────────────────────────────────────────────────────────────
+ШАГ 3. Исправить remote и отправить код
+──────────────────────────────────────────────────────────────
+
+  cd C:\Users\user\Desktop\дипломм
+  git remote set-url origin https://github.com/meudoo/voluntis.git
+  git remote -v
+  git add .
+  git commit -m "VOLUNTIS"
+  git push -u origin main
+
+При push откроется вход — войдите как **meudoo** (не amlagach).
+
+──────────────────────────────────────────────────────────────
+Если снова откроется amlagach
+──────────────────────────────────────────────────────────────
+
+В браузере выйдите из GitHub (amlagach) → войдите как meudoo.
+Или push через токен:
+  GitHub → Settings → Developer settings → Personal access tokens
+  → Generate → права repo → вставить вместо пароля при push.
+
+══════════════════════════════════════════════════════════════

@@ -1,0 +1,11 @@
+{
+  "name": "voluntis",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VOLUNTIS — волонтёрская платформа (диплом)",
+  "scripts": {
+    "start": "npm start --prefix backend",
+    "install:all": "npm install --prefix backend",
+    "build:netlify": "node scripts/build-netlify.js"
+  }
+}

@@ -1,0 +1,14 @@
+# Простой деплой: один Web Service = сайт + API (см. RENDER-ПОШАГОВО.md).
+# Netlify не нужен.
+services:
+  - type: web
+    name: voluntis-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

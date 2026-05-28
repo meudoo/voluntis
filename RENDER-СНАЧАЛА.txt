@@ -1,0 +1,61 @@
+══════════════════════════════════════════════════════════════
+  СНАЧАЛА RENDER — потом Netlify (иначе вход не работает)
+══════════════════════════════════════════════════════════════
+
+Ошибка «Нет связи с API (voluntis-api.onrender.com)» значит:
+на Render НЕТ запущенного сервера по этому адресу.
+
+voluntis-api.onrender.com — это только пример имени.
+Вы должны СОЗДАТЬ свой Web Service и взять СВОЙ URL.
+
+──────────────────────────────────────────────────────────────
+1. Зайдите на https://dashboard.render.com
+──────────────────────────────────────────────────────────────
+
+2. Кнопка «+ New» (справа вверху) → «Web Service»
+
+3. Подключите GitHub с папкой проекта «дипломм»
+   (или загрузите код на GitHub, если ещё нет)
+
+4. Настройки (важно!):
+   Root Directory:  backend
+   Build Command:   npm install
+   Start Command:   node server.js
+   Instance Type:   Free
+
+5. «Create Web Service» → ждите статус LIVE (зелёный), 5–15 мин.
+
+6. Скопируйте URL вверху страницы, например:
+   https://voluntis-abc123.onrender.com
+
+7. Проверка в браузере (подставьте свой URL):
+   https://ВАШ-URL.onrender.com/api/health
+
+   Должно быть:  {"ok":true,"service":"voluntis-api"}
+   Если «Not Found» — сервис ещё не Live или Root Directory не backend.
+
+──────────────────────────────────────────────────────────────
+8. На сайте Netlify (voluntis.netlify.app)
+──────────────────────────────────────────────────────────────
+
+   Вход / Регистрация → жёлтый блок «Связь с API»
+   → вставьте ВАШ URL с Render
+   → «Сохранить URL» → «Проверить» (должно быть зелёное)
+   → Войти: admin@example.com  /  admin
+
+──────────────────────────────────────────────────────────────
+9. Пересоберите deploy-site (без старого URL)
+──────────────────────────────────────────────────────────────
+
+   PowerShell:
+   cd C:\Users\user\Desktop\дипломм
+   Remove-Item Env:BACKEND_URL -ErrorAction SilentlyContinue
+   npm run build:netlify
+
+   Загрузите на Netlify только папку deploy-site.
+
+   Или укажите свой URL при сборке:
+   $env:BACKEND_URL="https://ВАШ-URL.onrender.com"
+   npm run build:netlify
+
+══════════════════════════════════════════════════════════════

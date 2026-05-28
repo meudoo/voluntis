@@ -1,0 +1,14 @@
+# Netlify: публикуется только deploy-site/ (создаётся командой npm run build:netlify)
+# НЕ загружайте всю папку «дипломм» — иначе /api вернёт HTML вместо JSON.
+
+[build]
+  command = "npm run build:netlify"
+  publish = "deploy-site"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"

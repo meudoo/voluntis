@@ -1,0 +1,4419 @@
+<!DOCTYPE html>
+<html lang="ru">
+<!--
+  VOLUNTIS: один файл index.html (вёрстка + стили + скрипты). Бэкенд: backend/server.js + database.sqlite.
+
+  HEAD: charset, title, viewport; подключены Google Fonts (Inter, Roboto), Font Awesome 6.
+  STYLE: блок CSS ниже задаёт переменные :root (цвета, радиусы), сетку, навбар, карточки, формы, чат, модалки, таблицы админки.
+
+  BODY (основные id для JS):
+  mainNav — кнопки с data-page переключают SPA-страницы.
+  page-home, page-dashboard, page-chat, page-profile, page-rules, page-auth, page-admin, page-banned — секции; класс hidden прячет блок.
+  dashboardList, dashboardTabs, dashboardFilters, requestForm — заявки и форма создания.
+  chatContacts, chatMessages, chatForm, chatInput — чат; chatNewUserSearch, chatNewCreateBtn — новый диалог.
+  profile* — поля профиля и действия; ratingForm — отзыв.
+  adminRequestsTable, adminComplaintsTable, adminUsersLimitedTable — таблицы команды сайта.
+  notificationBellBtn, notificationPanel — уведомления.
+  loginForm, registerForm, authTabs — вход и регистрация.
+  globalUserSearchInput, globalUserSearchBtn — поиск пользователя в шапке.
+
+  СКРИПТ (внизу страницы): сессия в localStorage (SESSION_KEY, TOKEN_KEY), apiGet/apiPost с Bearer,
+  showPage — показ секции и ленивый вызов render*, renderDashboard строит карточки заявок и кнопки этапов,
+  renderChat — список диалогов и сообщения, startChatWith — POST /api/chats/create,
+  renderProfile / renderAdmin — профиль и админка, обработчики внизу файла — submit форм, делегирование кликов по спискам.
+
+  Поток данных: браузер → fetch /api/* → Express → SQLite → JSON → обновление sessionUser и перерисовка.
+-->
+<head>
+  <meta charset="UTF-8" />
+  <title>VOLUNTIS — волонтёрская платформа</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- URL бэкенда на Render (без / в конце). Скопируйте из Render → ваш Web Service → URL вверху страницы -->
+  <meta name="voluntis-api" content="" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto:wght@300;400;500;700&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- Иконки -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+
+  <style>
+    /* Глобальные стили: переменные темы, сброс отступов, типографика, утилитарные классы (.hidden, .text-muted). */
+    :root {
+      --primary: #4A90E2;       /* основной синий кнопок и ссылок */
+      --primary-soft: #e8f2ff; /* фон подсветки под primary */
+      --accent: #50C878;       /* зелёный акцент (успех, волонтёрские бейджи) */
+      --accent-soft: #e6f9f0;
+      --bg: #f5f7fb;           /* общий фон страницы */
+      --text-main: #1f2933;    /* основной цвет текста */
+      --text-muted: #6b7280;   /* подписи, второстепенный текст */
+      --card-radius: 18px;     /* скругление карточек */
+      --shadow-soft: 0 18px 45px rgba(15, 23, 42, 0.12); /* тень карточек */
+    }
+
+    /* padding/border учитываются внутри width: 100% у блоков */
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', 'Roboto', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: radial-gradient(circle at top left, #e0f2ff 0, #f5f7fb 45%, #fdfdfd 100%);
+      color: var(--text-main);
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    main { flex: 1; }
+
+    .container {
+      width: 100%;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 20px 20px 40px;
+    }
+
+    .hidden { display: none !important; }
+    .text-muted { color: var(--text-muted); }
+    .text-sm { font-size: 12px; }
+    .text-xs { font-size: 11px; }
+    .mt-sm { margin-top: 8px; }
+
+    /* Навбар: липкий верх, логотип, ссылки, шапка пользователя */
+    /* ===== NAVBAR ===== */
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(18px);
+      background: linear-gradient(to bottom, rgba(245, 247, 251, 0.92), rgba(245, 247, 251, 0.8));
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .navbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 20% 0, var(--accent) 0, var(--primary) 45%, #111827 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 18px;
+      font-weight: 700;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.25);
+    }
+
+    .logo-text { display: flex; flex-direction: column; }
+    .logo-title { font-weight: 700; letter-spacing: 0.02em; font-size: 18px; }
+    .logo-subtitle { font-size: 11px; color: var(--text-muted); }
+
+    .nav-links {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .nav-links button {
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: inherit;
+      font: inherit;
+      transition: all 0.2s ease;
+    }
+
+    .nav-links button:hover {
+      background: rgba(148, 163, 184, 0.14);
+      color: var(--text-main);
+    }
+
+    .nav-links button.active {
+      background: rgba(74, 144, 226, 0.12);
+      color: var(--primary);
+    }
+
+    .nav-cta {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .btn {
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 9px 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), #2563eb);
+      color: #ffffff;
+      box-shadow: 0 14px 32px rgba(37, 99, 235, 0.35);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+      color: var(--text-main);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444, #b91c1c);
+      color: #fff;
+    }
+
+    /* Первый экран главной: заголовок, CTA, фоновые карточки */
+    /* ===== HERO (ГЛАВНАЯ) ===== */
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 40px;
+      align-items: center;
+      padding: 40px 0 0;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: rgba(236, 252, 243, 0.8);
+      color: #166534;
+      border: 1px solid rgba(34, 197, 94, 0.28);
+    }
+
+    .hero-heading {
+      font-size: clamp(32px, 4vw, 40px);
+      letter-spacing: 0.01em;
+      margin-bottom: 16px;
+    }
+
+    .hero-gradient-text {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .hero-subtitle {
+      font-size: 15px;
+      color: var(--text-muted);
+      max-width: 460px;
+      line-height: 1.6;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 22px 0 10px;
+    }
+
+    .hero-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .stat-pill {
+      background: white;
+      border-radius: 999px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
+      font-size: 12px;
+    }
+
+    .stat-pill strong { font-size: 15px; }
+
+    .hero-visual { position: relative; }
+
+    .hero-card {
+      background: rgba(255, 255, 255, 0.96);
+      border-radius: 28px;
+      padding: 20px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .mini-card {
+      background: linear-gradient(145deg, #ffffff, #f8fafc);
+      border-radius: 18px;
+      padding: 12px 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      border: 1px solid rgba(226, 232, 240, 0.9);
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
+      font-size: 12px;
+    }
+
+    .mini-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .mini-card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 6px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.1);
+      color: #1d4ed8;
+    }
+
+    .badge-distance {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(74, 144, 226, 0.08);
+      color: #1d4ed8;
+    }
+
+    .pill-success {
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.12);
+      color: #15803d;
+    }
+
+    .hero-floating {
+      position: absolute;
+      inset: -18px -30px auto auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .floating-pill {
+      backdrop-filter: blur(14px);
+      background: rgba(15, 23, 42, 0.9);
+      color: white;
+      border-radius: 999px;
+      padding: 8px 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.45);
+    }
+
+    .floating-pill.secondary {
+      background: rgba(15, 23, 42, 0.78);
+      font-size: 10px;
+    }
+
+    /* Универсальные карточки, теги, кнопки (.btn), сетка каталога */
+    /* ===== СЕКЦИИ/КАРТОЧКИ ===== */
+    .section { padding: 32px 0 8px; }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .section-title { font-size: 20px; margin: 0; }
+
+    .section-subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      max-width: 380px;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.96);
+      border-radius: var(--card-radius);
+      padding: 16px 16px 14px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .card-title { font-size: 15px; margin: 0; }
+
+    .card-body { font-size: 13px; color: var(--text-muted); }
+
+    .card-footer {
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+
+    .tag {
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: rgba(74, 144, 226, 0.08);
+      color: #1d4ed8;
+    }
+
+    .tag.green {
+      background: rgba(80, 200, 120, 0.12);
+      color: #15803d;
+    }
+
+    /* Заявки: вкладки, фильтры, список карточек, форма создания */
+    /* ===== DASHBOARD ===== */
+    .layout-two-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+      gap: 24px;
+      margin-top: 20px;
+    }
+
+    .sidebar-card {
+      background: rgba(15, 23, 42, 0.96);
+      color: white;
+      border-radius: 24px;
+      padding: 18px 18px 16px;
+      box-shadow: 0 20px 38px rgba(15, 23, 42, 0.7);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .sidebar-card h3 { margin-top: 0; font-size: 18px; }
+    .sidebar-card p { font-size: 13px; color: rgba(226, 232, 240, 0.9); }
+
+    .badge-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      background: rgba(15, 23, 42, 0.8);
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      padding: 4px 9px;
+      margin-bottom: 6px;
+    }
+
+    .filters-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .filters-row .search {
+      flex: 1 1 180px;
+      position: relative;
+    }
+
+    .filters-row .search input {
+      padding-left: 32px;
+    }
+
+    .filters-row .search i {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Глобальный поиск: иконка слева в строке ввода */
+    .global-user-search {
+      position: relative;
+      flex: 1 1 220px;
+      max-width: 360px;
+      min-width: 0;
+    }
+    .global-user-search .input {
+      padding-left: 34px;
+      width: 100%;
+    }
+    .global-user-search > i {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: var(--text-muted);
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .global-search-bar {
+      width: 100%;
+      margin: 18px 0 6px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Чат: поиск для нового диалога — иконка слева */
+    .chat-inline-search {
+      position: relative;
+      width: 100%;
+    }
+    .chat-inline-search .input {
+      padding-left: 34px;
+      width: 100%;
+    }
+    .chat-inline-search > i {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 13px;
+      color: var(--text-muted);
+      pointer-events: none;
+      z-index: 1;
+    }
+    .chat-newchat-panel {
+      padding: 8px 12px 10px;
+      margin: 0 0 8px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    }
+    .chat-newchat-panel.hidden {
+      display: none;
+    }
+    .chat-new-search-results {
+      list-style: none;
+      margin: 6px 0 0;
+      padding: 0;
+      max-height: 180px;
+      overflow-y: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(248, 250, 252, 0.96);
+    }
+    .chat-new-search-results li {
+      border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+    }
+    .chat-new-search-results li:last-child {
+      border-bottom: none;
+    }
+    .chat-new-pick-btn {
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 12px;
+      color: #0f172a;
+      font-family: inherit;
+    }
+    .chat-new-pick-btn:hover {
+      background: rgba(74, 144, 226, 0.08);
+    }
+    .chat-new-pick-btn.active-pick {
+      background: rgba(74, 144, 226, 0.15);
+      font-weight: 600;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      z-index: 3000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-overlay.hidden { display: none !important; }
+    .modal-card {
+      background: #fff;
+      border-radius: 18px;
+      max-width: 440px;
+      width: 100%;
+      padding: 20px 22px;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+    }
+    .modal-card h3 { margin: 0 0 12px; font-size: 17px; }
+    .modal-card ul { margin: 0 0 14px; padding-left: 20px; font-size: 13px; line-height: 1.45; color: #334155; }
+    .req-timeline-inline {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(248, 250, 252, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      font-size: 12px;
+    }
+    .req-timeline-inline.hidden { display: none; }
+
+    .input, .textarea, .select {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      padding: 9px 11px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      background: rgba(248, 250, 252, 0.98);
+    }
+
+    .textarea { min-height: 70px; resize: vertical; }
+
+    .pill-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill-filters button {
+      border-radius: 999px;
+      border: none;
+      padding: 6px 11px;
+      font-size: 12px;
+      background: rgba(15, 23, 42, 0.04);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pill-filters button.active {
+      background: rgba(74, 144, 226, 0.1);
+      color: #1d4ed8;
+    }
+
+    .badge-rating {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(250, 204, 21, 0.08);
+      color: #92400e;
+    }
+
+    .role-toggle {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 3px;
+      background: rgba(15, 23, 42, 0.04);
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      gap: 3px;
+    }
+
+    .role-toggle button {
+      flex: 1 1 0;
+      border-radius: 999px;
+      border: none;
+      padding: 6px 10px;
+      font-size: 12px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .role-toggle button.active {
+      background: #ffffff;
+      color: var(--text-main);
+      box-shadow: 0 10px 20px rgba(15, 23, 42, 0.15);
+    }
+
+    /* Чат: две колонки (контакты + переписка), пузыри сообщений, поиск */
+    /* ===== CHAT ===== */
+    .chat-shell {
+      margin-top: 22px;
+      background: rgba(255, 255, 255, 0.98);
+      border-radius: 24px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid rgba(226, 232, 240, 0.98);
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      min-height: 420px;
+    }
+
+    .chat-sidebar {
+      border-right: 1px solid rgba(226, 232, 240, 0.9);
+      padding: 14px 12px;
+    }
+
+    .chat-contact-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+
+    .chat-contact {
+      border-radius: 14px;
+      padding: 7px 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .chat-contact:hover {
+      background: rgba(248, 250, 252, 0.9);
+    }
+
+    .chat-contact.active {
+      background: rgba(74, 144, 226, 0.1);
+      border-color: rgba(74, 144, 226, 0.5);
+    }
+
+    .chat-main {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chat-main-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .chat-messages {
+      flex: 1;
+      padding: 12px 16px 10px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: radial-gradient(circle at top, #eff6ff 0, #ffffff 45%);
+    }
+
+    .message-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .message-row.me {
+      justify-content: flex-end;
+    }
+
+    .message-bubble {
+      max-width: 68%;
+      padding: 8px 10px;
+      border-radius: 16px;
+      font-size: 13px;
+      line-height: 1.4;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.13);
+    }
+
+    .message-bubble.them {
+      background: #ffffff;
+      border-bottom-left-radius: 4px;
+    }
+
+    .message-bubble.me {
+      background: linear-gradient(135deg, var(--primary), #2563eb);
+      color: #ffffff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .chat-input-row {
+      padding: 10px 14px;
+      border-top: 1px solid rgba(226, 232, 240, 0.9);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chat-input {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(248, 250, 252, 0.95);
+      border-radius: 999px;
+      padding: 5px 10px;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+    }
+
+    .chat-input input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .icon-button {
+      border-radius: 999px;
+      border: none;
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      background: transparent;
+      color: var(--text-muted);
+    }
+
+    .icon-button.primary {
+      background: linear-gradient(135deg, var(--accent), #22c55e);
+      color: #ffffff;
+      box-shadow: 0 10px 22px rgba(22, 163, 74, 0.4);
+    }
+
+    /* Профиль: аватар, анкета, отзывы, форма оценки */
+    /* ===== PROFILE ===== */
+    .profile-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr);
+      gap: 22px;
+      margin-top: 22px;
+    }
+
+    .profile-card {
+      background: linear-gradient(145deg, rgba(15, 23, 42, 0.98), rgba(23, 37, 84, 0.98));
+      color: white;
+      border-radius: 26px;
+      padding: 18px 18px 16px;
+      box-shadow: 0 22px 40px rgba(15, 23, 42, 0.9);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .avatar-large {
+      width: 72px;
+      height: 72px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: 700;
+      border: 3px solid rgba(15, 23, 42, 0.8);
+    }
+
+    .profile-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .stat-card {
+      background: rgba(15, 23, 42, 0.86);
+      border-radius: 16px;
+      padding: 8px 9px;
+      font-size: 11px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+    }
+
+    .stat-card strong {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 2px;
+    }
+
+    .badge-row {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .badge-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(22, 163, 74, 0.2);
+      color: #bbf7d0;
+    }
+
+    .timeline {
+      background: rgba(255, 255, 255, 0.98);
+      border-radius: 22px;
+      padding: 17px 16px 14px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid rgba(226, 232, 240, 0.98);
+    }
+
+    .timeline-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .timeline-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      margin-top: 4px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+    }
+
+    /* Вход и регистрация: вкладки, поля форм */
+    /* ===== AUTH ===== */
+    .auth-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+      gap: 26px;
+      margin-top: 24px;
+      align-items: center;
+    }
+
+    .auth-hero h1 { font-size: 24px; margin-bottom: 10px; }
+    .auth-hero p { font-size: 14px; color: var(--text-muted); max-width: 380px; }
+
+    .auth-points {
+      margin-top: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .form-card {
+      background: rgba(255, 255, 255, 0.98);
+      border-radius: 22px;
+      padding: 22px 20px 18px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid rgba(226, 232, 240, 0.98);
+    }
+
+    .form-title { font-size: 18px; margin: 0 0 4px; }
+    .form-subtitle { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
+
+    .form-group { margin-bottom: 14px; }
+
+    .form-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      margin-bottom: 5px;
+      color: var(--text-muted);
+    }
+
+    .tabs {
+      display: inline-flex;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.04);
+      padding: 3px;
+      margin-bottom: 12px;
+    }
+
+    .tabs button {
+      border-radius: 999px;
+      border: none;
+      padding: 7px 14px;
+      font-size: 12px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text-muted);
+    }
+
+    .tabs button.active {
+      background: #ffffff;
+      color: var(--text-main);
+      box-shadow: 0 10px 20px rgba(15, 23, 42, 0.14);
+    }
+
+    .auth-alt {
+      margin-top: 10px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      color: var(--text-muted);
+    }
+
+    .auth-alt a { color: var(--primary); font-weight: 500; }
+
+    /* Подвал сайта */
+    /* ===== FOOTER ===== */
+    .footer {
+      border-top: 1px solid rgba(148, 163, 184, 0.18);
+      padding: 14px 0 18px;
+      margin-top: auto;
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      gap: 8px;
+    }
+
+    /* Админка: таблицы заявок, жалоб, пользователей с санкциями */
+    /* ===== ADMIN TABLES ===== */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th, td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+      text-align: left;
+    }
+
+    th {
+      background: rgba(248, 250, 252, 0.9);
+      font-weight: 600;
+    }
+
+    /* Узкие экраны: уплотнение сеток и навбара */
+    /* ===== АДАПТИВ ===== */
+    @media (max-width: 960px) {
+      .hero { grid-template-columns: minmax(0, 1fr); }
+      .hero-visual { order: -1; }
+      .layout-two-columns,
+      .profile-layout,
+      .auth-layout { grid-template-columns: minmax(0, 1fr); }
+      .chat-shell { grid-template-columns: minmax(0, 220px) minmax(0, 1.4fr); }
+    }
+
+    @media (max-width: 720px) {
+      .navbar-inner { flex-wrap: wrap; }
+      .nav-links { display: none; }
+      /* Только для админа: на узком экране меню скрыто, кнопка — в nav-cta */
+      #adminPanelBtn:not(.hidden) { display: inline-flex !important; }
+      #adminPanelBtn.hidden { display: none !important; }
+      .chat-shell { grid-template-columns: minmax(0, 1fr); }
+      .chat-sidebar { border-right: none; border-bottom: 1px solid rgba(226, 232, 240, 0.9); }
+      .footer-inner { flex-direction: column; align-items: flex-start; }
+    }
+
+    /* Уведомления (колокольчик) */
+    .notification-bell-wrap {
+      position: fixed;
+      bottom: 22px;
+      right: 22px;
+      z-index: 2500;
+      font-family: inherit;
+    }
+    .notification-bell-wrap.hidden { display: none !important; }
+    .notification-bell-btn {
+      position: relative;
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, #4A90E2, #50C878);
+      color: #fff;
+      font-size: 20px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .notification-bell-btn:hover { filter: brightness(1.05); }
+    .notification-bell-badge {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: #e74c3c;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 18px;
+      text-align: center;
+    }
+    .notification-bell-badge.hidden { display: none; }
+    .notification-panel {
+      position: absolute;
+      bottom: 60px;
+      right: 0;
+      width: min(340px, calc(100vw - 40px));
+      max-height: 320px;
+      overflow-y: auto;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+    }
+    .notification-panel.hidden { display: none; }
+    .notification-panel-title {
+      padding: 12px 14px;
+      font-weight: 700;
+      font-size: 14px;
+      border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+    }
+    .notification-list {
+      list-style: none;
+      margin: 0;
+      padding: 8px 0;
+    }
+    .notification-list li button {
+      width: 100%;
+      text-align: left;
+      padding: 10px 14px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 13px;
+      color: #0f172a;
+    }
+    .notification-list li button:hover {
+      background: rgba(74, 144, 226, 0.08);
+    }
+  </style>
+</head>
+
+<body>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="container navbar-inner">
+      <div class="logo">
+        <div class="logo-mark">V</div>
+        <div class="logo-text">
+          <span class="logo-title">VOLUNTIS</span>
+          <span class="logo-subtitle">волонтёрская платформа</span>
+        </div>
+      </div>
+
+      <nav class="nav-links" id="mainNav">
+        <button data-page="home" class="active">Главная</button>
+        <button data-page="dashboard">Заявки</button>
+        <button data-page="chat">Чат</button>
+        <button data-page="profile">Профиль</button>
+        <button data-page="rules">Правила</button>
+        <button data-page="admin" id="adminNavBtn" class="hidden">
+          Админ-панель
+        </button>
+        <button data-page="auth" id="authNavBtn">Вход / Регистрация</button>
+      </nav>
+
+      <div class="nav-cta">
+        <span id="currentUserLabel" class="text-sm text-muted"></span>
+        <button type="button" id="adminPanelBtn" class="btn btn-primary hidden" style="padding:8px 14px;font-size:13px;">
+          <i class="fa-solid fa-shield-halved"></i> Админ-панель
+        </button>
+        <button id="logoutBtn" class="btn btn-outline hidden">
+          <i class="fa-regular fa-user"></i> Выйти
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <!-- Глобальный поиск пользователя под навигацией -->
+      <div class="global-search-bar">
+        <div class="global-user-search">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <input type="text" id="globalUserSearchInput" class="input"
+            placeholder="Найти пользователя по email…" />
+        </div>
+        <button type="button" id="globalUserSearchBtn" class="btn btn-outline" style="padding:6px 14px;font-size:13px;white-space:nowrap;">
+          Найти
+        </button>
+      </div>
+
+      <!-- ГЛАВНАЯ -->
+      <section id="page-home">
+        <section class="hero">
+          <div>
+            <div class="chip">
+              <i class="fa-solid fa-sparkles"></i>
+              Уже сегодня можно помочь кому‑то рядом
+            </div>
+            <h1 class="hero-heading">
+              Соединяем тех, кто
+              <span class="hero-gradient-text">хочет помочь</span>
+              и тех, кому помощь нужна.
+            </h1>
+            <p class="hero-subtitle">
+              VOLUNTIS — волонтёрская платформа с простым входом,
+              системой баллов и безопасным общением.
+            </p>
+            <div class="hero-actions">
+              <button class="btn btn-primary" data-open-page="be-volunteer">
+                <i class="fa-solid fa-hand-holding-heart"></i>
+                Стать волонтером
+              </button>
+              <button class="btn btn-outline" data-open-page="be-seeker">
+                <i class="fa-solid fa-hands-holding-child"></i>
+                Мне нужна помощь
+              </button>
+            </div>
+            <div class="mt-md" style="background:rgba(74,144,226,0.10);border:1px solid rgba(74,144,226,0.25);padding:14px 16px;border-radius:18px;">
+              <div style="font-weight:800;letter-spacing:0.03em;font-size:14px;text-transform:uppercase;">
+                За добрые дела вы получаете баллы
+              </div>
+              <div class="text-sm text-muted" style="margin-top:6px;">
+                Чем сложнее помощь — тем больше баллов (от 5 до 30). Баллы начисляются после завершения дела по согласию обоих.
+              </div>
+            </div>
+            <div class="hero-stats">
+              <div class="stat-pill">
+                <i class="fa-solid fa-location-dot" style="color:#4A90E2"></i>
+                <div>
+                  <strong>Заявки</strong>
+                  создаются нуждающимися и проходят проверку
+                </div>
+              </div>
+              <div class="stat-pill">
+                <i class="fa-solid fa-users" style="color:#50C878"></i>
+                <div>
+                  <strong>Создавайте свои профили</strong>
+                  и общайтесь в живых чатах
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-visual">
+            <div class="hero-card">
+              <div class="hero-grid">
+                <article class="mini-card">
+                  <div class="mini-card-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <div class="avatar">А</div>
+                      <div>
+                        <strong style="font-size:13px;">Анна, пример</strong>
+                        <div class="text-sm text-muted">волонтёр, доставка продуктов</div>
+                      </div>
+                    </div>
+                    <span class="badge"><i class="fa-solid fa-star"></i> рейтинг 0.0</span>
+                  </div>
+                  <div class="mini-card-footer">
+                    <span><i class="fa-solid fa-location-dot"></i> 0.8 км от вас</span>
+                    <span class="pill-success">
+                      <i class="fa-solid fa-check"></i> 0 дел
+                    </span>
+                  </div>
+                </article>
+
+                <article class="mini-card">
+                  <div class="mini-card-header">
+                    <div>
+                      <strong style="font-size:13px;">Нужна помощь с аптекой</strong>
+                      <div class="text-sm text-muted">пример заявки</div>
+                    </div>
+                    <span class="tag green">приоритетно</span>
+                  </div>
+                  <p class="text-sm text-muted">
+                    Купить лекарства по рецепту и принести до 19:00.
+                  </p>
+                  <div class="mini-card-footer">
+                    <span><i class="fa-regular fa-clock"></i> до 3 часов</span>
+                    <button class="btn btn-outline" style="padding:5px 10px;font-size:11px;"
+                      data-open-page="dashboard">
+                      Помочь
+                    </button>
+                  </div>
+                </article>
+
+                <article class="mini-card">
+                  <div class="mini-card-header">
+                    <div>
+                      <strong style="font-size:13px;">Прогулка с собакой</strong>
+                      <div class="text-sm text-muted">пример заявки</div>
+                    </div>
+                    <i class="fa-solid fa-dog" style="color:#4A90E2;"></i>
+                  </div>
+                  <div class="mini-card-footer">
+                    <span class="badge-distance">1.2 км</span>
+                    <span class="text-sm text-muted">30–40 минут</span>
+                  </div>
+                </article>
+
+                <article class="mini-card">
+                  <div class="mini-card-header">
+                    <div>
+                      <strong style="font-size:13px;">Онлайн‑подготовка к ЕГЭ</strong>
+                      <div class="text-sm text-muted">пример заявки</div>
+                    </div>
+                    <i class="fa-solid fa-laptop-code" style="color:#50C878;"></i>
+                  </div>
+                  <p class="text-sm text-muted">
+                    Нужен наставник для занятий 1–2 раза в неделю.
+                  </p>
+                </article>
+              </div>
+            </div>
+
+            <div class="hero-floating">
+              <div class="floating-pill">
+                <i class="fa-solid fa-bolt"></i>
+                Система баллов за добрые дела
+              </div>
+              <div class="floating-pill secondary">
+                <i class="fa-solid fa-shield-heart"></i>
+                Команда сайта следит за безопасностью
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- spisok lyudey na glavnoi (po roli) -->
+        <section class="section" id="homeDirectorySection">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title" id="homeDirectoryTitle">Люди рядом</h2>
+              <p class="section-subtitle" id="homeDirectorySubtitle">
+                Войдите, чтобы увидеть список волонтёров и нуждающихся и перейти в профиль/чат.
+              </p>
+            </div>
+            <button class="btn btn-outline" id="homeDirectoryRefreshBtn" type="button">
+              <i class="fa-solid fa-rotate"></i> Обновить
+            </button>
+          </div>
+          <div class="card-grid" id="homeDirectoryGrid"></div>
+        </section>
+
+        <!-- ТОП волонтёров -->
+        <section class="section" id="homeTopSection">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Топ лучших волонтёров</h2>
+              <p class="section-subtitle">
+                Рейтинг строится по баллам (social credit). Баллы начисляются за завершённые добрые дела.
+              </p>
+            </div>
+            <button class="btn btn-outline" id="homeTopRefreshBtn" type="button">
+              <i class="fa-solid fa-rotate"></i> Обновить
+            </button>
+          </div>
+          <div class="card-grid" id="homeTopGrid"></div>
+        </section>
+
+        <!-- FAQ -->
+        <section class="section" id="homeFaqSection">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Частые вопросы</h2>
+              <p class="section-subtitle">
+                Коротко о том, как работает платформа, баллы и завершение дел.
+              </p>
+            </div>
+          </div>
+          <div class="card-grid">
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">Как начисляются баллы?</h3>
+                <span class="tag green"><i class="fa-solid fa-bolt"></i> 5–30</span>
+              </div>
+              <p class="card-body">
+                Баллы начисляются волонтёру после завершения дела. Завершение происходит только когда
+                и волонтёр, и нуждающийся нажали «Завершить дело».
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">Почему заявка не сразу видна волонтёрам?</h3>
+                <span class="tag"><i class="fa-solid fa-shield-heart"></i> верификация</span>
+              </div>
+              <p class="card-body">
+                Новые заявки сначала попадают в статус «На проверке». Команда сайта подтверждает, что
+                помощь действительно нужна и дело полезное.
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">Можно ли отказаться от помощи?</h3>
+                <span class="tag"><i class="fa-solid fa-circle-question"></i> да</span>
+              </div>
+              <p class="card-body">
+                Вы можете отменить дело с указанием причины (это видно участникам и команде сайта).
+              </p>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <!-- DASHBOARD -->
+      <section id="page-dashboard" class="hidden">
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title" id="dashboardTitle">Личный кабинет</h2>
+              <p class="section-subtitle" id="dashboardSubtitle">Загрузка данных…</p>
+            </div>
+          </div>
+
+          <div class="layout-two-columns">
+            <div>
+              <div class="tabs mb-sm" id="dashboardTabs" style="margin-bottom:12px;">
+                <button type="button" data-tab="active" class="active">Активные</button>
+                <button type="button" data-tab="completed">Выполненные</button>
+                <button type="button" data-tab="pending">Ожидают верификации</button>
+              </div>
+              <div class="filters-row">
+                <div class="search">
+                  <i class="fa-solid fa-magnifying-glass"></i>
+                  <input type="text" id="dashboardSearch" class="input"
+                    placeholder="Поиск по описанию, типу помощи, имени…" />
+                </div>
+                <div class="form-group" style="max-width:160px;" id="dashboardCityWrap">
+                  <label class="form-label text-xs" style="margin-bottom:4px;">Город заявки</label>
+                  <input type="text" class="input" id="dashboardCityFilter" placeholder="Напр. Москва" autocomplete="off" />
+                </div>
+                <div class="form-group" style="max-width:170px;">
+                  <label class="form-label text-xs" style="margin-bottom:4px;">Сложность</label>
+                  <select class="select" id="dashboardDifficulty">
+                    <option value="all">Любая</option>
+                    <option value="1">1 — очень легко</option>
+                    <option value="2">2 — легко</option>
+                    <option value="3">3 — средне</option>
+                    <option value="4">4 — сложно</option>
+                    <option value="5">5 — очень сложно</option>
+                  </select>
+                </div>
+                <div class="pill-filters" id="dashboardFilters">
+                  <button data-filter="all" class="active">Все</button>
+                  <button data-filter="groceries"><i class="fa-solid fa-bag-shopping"></i> Продукты</button>
+                  <button data-filter="medicine"><i class="fa-solid fa-kit-medical"></i> Аптека</button>
+                  <button data-filter="walk"><i class="fa-solid fa-dog"></i> Прогулка</button>
+                  <button data-filter="education"><i class="fa-solid fa-book-open"></i> Обучение</button>
+                  <button data-filter="physical"><i class="fa-solid fa-people-carry-box"></i> Физическая помощь</button>
+                  <button data-filter="material"><i class="fa-solid fa-box-open"></i> Материальная помощь</button>
+                  <button data-filter="psychological"><i class="fa-solid fa-brain"></i> Психологическая поддержка</button>
+                  <button data-filter="financial"><i class="fa-solid fa-hand-holding-dollar"></i> Финансовая помощь</button>
+                  <button data-filter="legal"><i class="fa-solid fa-scale-balanced"></i> Юридическая</button>
+                  <button data-filter="transport"><i class="fa-solid fa-car-side"></i> Транспорт</button>
+                  <button data-filter="household"><i class="fa-solid fa-broom"></i> Бытовая</button>
+                  <button data-filter="care"><i class="fa-solid fa-person-cane"></i> Уход/сопровождение</button>
+                  <button data-filter="events"><i class="fa-solid fa-calendar-check"></i> Мероприятия</button>
+                </div>
+              </div>
+              <div class="card-grid" id="dashboardList"></div>
+            </div>
+
+            <aside class="sidebar-card">
+              <div class="badge-inline">
+                <i class="fa-solid fa-circle-info"></i>
+                Заявки проходят верификацию командой сайта
+              </div>
+              <h3>Создать свою заявку</h3>
+              <p class="text-xs">
+                Заполните форму ниже. После проверки командой сайта заявка будет видна волонтёрам.
+              </p>
+              <form id="requestForm" class="mt-sm">
+                <div class="form-group">
+                  <label class="form-label">Заголовок</label>
+                  <input class="input" id="reqTitle" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Тип помощи</label>
+                  <select class="select" id="reqType">
+                    <option value="groceries">Продукты</option>
+                    <option value="medicine">Аптека</option>
+                    <option value="walk">Прогулка</option>
+                    <option value="education">Обучение</option>
+                    <option value="physical">Физическая помощь (перенести/прибрать)</option>
+                    <option value="material">Материальная помощь (вещи/одежда)</option>
+                    <option value="psychological">Психологическая поддержка</option>
+                    <option value="financial">Финансовая помощь</option>
+                    <option value="legal">Юридическая консультация</option>
+                    <option value="transport">Транспорт/подвезти</option>
+                    <option value="household">Бытовая помощь</option>
+                    <option value="care">Уход/сопровождение</option>
+                    <option value="events">Помощь на мероприятии</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Сложность (влияет на баллы: 5–30)</label>
+                  <select class="select" id="reqDifficulty">
+                    <option value="1">1 — очень легко (5 баллов)</option>
+                    <option value="2">2 — легко (10 баллов)</option>
+                    <option value="3" selected>3 — средне (15 баллов)</option>
+                    <option value="4">4 — сложно (22 балла)</option>
+                    <option value="5">5 — очень сложно (30 баллов)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Город, где нужна помощь</label>
+                  <input class="input" id="reqCity" placeholder="Например: Казань" required />
+                  <p class="text-xs text-muted" style="margin-top:4px;">Волонтёры смогут отфильтровать заявки по городу.</p>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Срочность</label>
+                  <select class="select" id="reqUrgency">
+                    <option value="today">Срочно (сегодня / как можно скорее)</option>
+                    <option value="week">В течение недели</option>
+                    <option value="flex" selected>Гибко / не срочно</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Когда удобно (необязательно)</label>
+                  <input type="datetime-local" class="input" id="reqNeededAt" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="reqRecurring" />
+                    <span>Повторяющаяся нужда (п. 7)</span>
+                  </label>
+                  <input class="input mt-sm" id="reqRecurringNote" placeholder="Например: каждую субботу, раз в неделю…" style="margin-top:6px;" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Описание (кратко обоснование)</label>
+                  <textarea class="textarea" id="reqDesc"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px;">
+                  Отправить на верификацию
+                </button>
+              </form>
+              <p class="text-xs mt-sm">
+                Примечание: в этом демо верификация происходит в разделе «Команда сайта». Не более 5 активных заявок одновременно.
+              </p>
+            </aside>
+          </div>
+        </section>
+      </section>
+
+      <!-- CHAT -->
+      <section id="page-chat" class="hidden">
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Диалоги</h2>
+              <p class="section-subtitle">
+                Реальные переписки между зарегистрированными пользователями.
+                Примеры диалогов уже есть, можно создавать новые.
+              </p>
+            </div>
+          </div>
+
+          <div class="chat-shell">
+            <aside class="chat-sidebar">
+              <div id="chatNewchatPanel" class="chat-newchat-panel hidden">
+                <label class="form-label text-xs" style="margin-bottom:6px;display:block;">Новый чат — найдите пользователя</label>
+                <div class="chat-inline-search">
+                  <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                  <input type="text" id="chatNewUserSearch" class="input" placeholder="Имя или email…" autocomplete="off" />
+                </div>
+                <ul id="chatNewSearchResults" class="chat-new-search-results" aria-live="polite"></ul>
+                <p id="chatNewSelectedHint" class="text-xs text-muted" style="margin:6px 0 4px;">Выберите человека в списке выше.</p>
+                <button type="button" id="chatNewCreateBtn" class="btn btn-outline" style="width:100%;padding:8px 12px;font-size:13px;">
+                  Создать чат
+                </button>
+              </div>
+              <ul class="chat-contact-list" id="chatContacts"></ul>
+            </aside>
+            <div class="chat-main">
+              <div class="chat-main-header">
+                <div class="title">
+                  <strong id="chatActiveName">Выберите диалог</strong>
+                  <span id="chatActiveSubtitle">Сообщения появятся здесь</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <input id="chatSearchInput" class="input" placeholder="Поиск по сообщениям…" style="min-width:220px;padding:8px 10px;" />
+                  <button id="chatSearchBtn" class="btn btn-outline" type="button" style="padding:8px 12px;font-size:12px;">
+                    <i class="fa-solid fa-magnifying-glass"></i> Найти
+                  </button>
+                  <button id="chatSearchClearBtn" class="btn btn-outline" type="button" style="padding:8px 12px;font-size:12px;">
+                    Очистить
+                  </button>
+                </div>
+              </div>
+              <div class="chat-messages" id="chatMessages"></div>
+              <form class="chat-input-row" id="chatForm">
+                <div class="chat-input">
+                  <i class="fa-regular fa-face-smile"></i>
+                  <input type="text" id="chatInput"
+                    placeholder="Напишите сообщение и нажмите Enter…" autocomplete="off" />
+                </div>
+                <button class="icon-button primary" type="submit">
+                  <i class="fa-solid fa-paper-plane"></i>
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <div id="chatSafetyModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chatSafetyTitle">
+            <div class="modal-card">
+              <h3 id="chatSafetyTitle">Безопасность при общении и встречах</h3>
+              <ul>
+                <li>Встречайтесь в людных местах, по возможности днём.</li>
+                <li>Не передавайте коды от карт, пароли и документы незнакомым людям.</li>
+                <li>Сообщайте о подозрительном поведении через «Пожаловаться» или команду сайта.</li>
+                <li>При регулярной помощи заранее договоритесь о времени и формате контакта.</li>
+              </ul>
+              <button type="button" class="btn btn-primary" id="chatSafetyOk" style="width:100%;">Понятно, продолжить</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- PROFILE -->
+      <section id="page-profile" class="hidden">
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Профиль</h2>
+              <p class="section-subtitle">
+                Ваши баллы, рейтинг и отзывы. Можно оценить других пользователей.
+              </p>
+            </div>
+          </div>
+
+          <div class="profile-layout">
+            <article class="profile-card">
+              <div class="avatar-large" id="profileInitials">V</div>
+              <h2 id="profileName">Гость</h2>
+              <div class="text-sm" id="profileRoleLabel">Роль не выбрана</div>
+              <div class="mt-sm" id="profileActions"></div>
+
+              <div class="mt-sm" style="background:rgba(15,23,42,0.18);border:1px solid rgba(148,163,184,0.35);padding:10px 12px;border-radius:18px;">
+                <div class="text-xs" style="opacity:0.9;">
+                  <strong>Город:</strong> <span id="profileCity">—</span><br/>
+                  <strong>Возраст:</strong> <span id="profileAge">—</span><br/>
+                  <strong>О себе:</strong> <span id="profileAbout">—</span>
+                </div>
+              </div>
+
+              <div class="profile-stats">
+                <div class="stat-card">
+                  <strong id="profilePoints">0</strong>
+                  баллов (social credit)
+                </div>
+                <div class="stat-card">
+                  <strong id="profileCompleted">0</strong>
+                  завершённых дел
+                </div>
+                <div class="stat-card">
+                  <strong id="profileRating">0.0</strong>
+                  средний рейтинг
+                </div>
+              </div>
+
+              <div class="badge-row" id="profileBadges"></div>
+
+              <div class="mt-sm" id="profileEditBlock"></div>
+            </article>
+
+            <aside class="timeline">
+              <h3>Отзывы о пользователе</h3>
+              <p class="text-xs text-muted">
+                Здесь отображаются оценки и комментарии, оставленные другими.
+              </p>
+              <ul class="timeline-list" id="profileReviews"></ul>
+
+              <div class="mt-sm">
+                <h4 class="text-sm" style="margin:6px 0;">Оценить пользователя</h4>
+                <form id="ratingForm">
+                  <input type="hidden" id="rateTargetUserId" value="" />
+                  <div class="form-group">
+                    <label class="form-label">Оцениваемый пользователь (email)</label>
+                    <input class="input" id="rateTargetEmail" placeholder="email пользователя" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">За какое завершённое дело оставить отзыв</label>
+                    <select class="select" id="rateRequestId">
+                      <option value="">Сначала выберите пользователя</option>
+                    </select>
+                    <div class="text-xs text-muted mt-xs">
+                      Отзыв можно оставить только после реально завершённого дела между вами.
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Оценка (1–5)</label>
+                    <input type="number" min="1" max="5" class="input" id="rateValue" value="5" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Комментарий</label>
+                    <textarea class="textarea" id="rateComment"></textarea>
+                  </div>
+                  <button type="submit" class="btn btn-outline" style="width:100%;margin-top:4px;">
+                    Оставить отзыв
+                  </button>
+                </form>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </section>
+
+      <!-- ПРАВИЛА -->
+      <section id="page-rules" class="hidden">
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Правила нахождения на сайте</h2>
+              <p class="section-subtitle">Что можно и чего нельзя делать на VOLUNTIS. Нарушение влечёт наказания.</p>
+            </div>
+          </div>
+          <div class="card-grid">
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">1. Запрещено неадекватное поведение и оскорбления</h3>
+                <span class="tag">Наказание: блокировка на 30 дней</span>
+              </div>
+              <p class="card-body">Оскорбления, угрозы, унижение достоинства в чате и заявках недопустимы. При повторных нарушениях — блокировка аккаунта навсегда.</p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">2. Запрещены мошенничество и ложные заявки</h3>
+                <span class="tag">Наказание: бессрочная блокировка</span>
+              </div>
+              <p class="card-body">Нельзя собирать деньги или вещи под ложным предлогом. Подтверждённое мошенничество ведёт к немедленной и бессрочной блокировке.</p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">3. Запрещён спам и реклама</h3>
+                <span class="tag">Наказание: ограничение чата и заявок на 7 дней</span>
+              </div>
+              <p class="card-body">Массовые однотипные сообщения, реклама сторонних сервисов и навязчивые предложения приводят к временному ограничению чата и размещения заявок.</p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">4. Конфиденциальность и безопасность</h3>
+                <span class="tag">Наказание: блокировка до выяснения</span>
+              </div>
+              <p class="card-body">Нельзя публиковать чужие персональные данные, требовать фото документов, просить выслать деньги напрямую без прозрачной причины.</p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">5. Честность при завершении дел</h3>
+                <span class="tag">Наказание: снятие баллов, ограничение заявок</span>
+              </div>
+              <p class="card-body">Запрещено отмечать дело как завершённое без реального оказания помощи. При выявлении — снятие баллов и ограничение на создание/принятие заявок.</p>
+            </article>
+            <article class="card">
+              <div class="card-header">
+                <h3 class="card-title">6. Город, сроки и лимиты</h3>
+                <span class="tag green">Рекомендации платформы</span>
+              </div>
+              <p class="card-body">
+                Указывайте реальный город помощи и адекватные сроки. Одновременно допускается не более пяти активных заявок у нуждающегося и не более пяти активных дел у волонтёра.
+                При встречах соблюдайте осторожность: людные места, без передачи кодов и паролей третьим лицам.
+              </p>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <!-- AUTH -->
+      <section id="page-auth" class="hidden">
+        <section class="section auth-layout">
+          <div class="auth-hero">
+            <div class="chip">
+              <i class="fa-solid fa-sparkles"></i>
+              Один аккаунт — несколько ролей
+            </div>
+            <h1>Вход и регистрация</h1>
+            <p>
+              Создайте аккаунт волонтёра, нуждающегося или участника команды сайта.
+                Данные хранятся в SQLite на Node.js сервере (для диплома — максимально просто).
+            </p>
+            <div class="auth-points">
+              <span><i class="fa-solid fa-circle-check"></i> Система баллов за помощь</span>
+              <span><i class="fa-solid fa-circle-check"></i> Рейтинги и отзывы</span>
+              <span><i class="fa-solid fa-circle-check"></i> Верификация заявок и жалобы</span>
+            </div>
+          </div>
+
+          <article class="form-card">
+            <div id="netlifyApiSetup" class="hidden" style="padding:12px 14px;margin-bottom:14px;border-radius:12px;border:1px solid #fbbf24;background:#fffbeb;">
+              <p class="text-sm" style="margin:0 0 8px;line-height:1.45;">
+                <strong>Шаг 1 — бэкенд на Render (обязательно).</strong> Без него вход не работает.
+                Адрес <code>voluntis-api.onrender.com</code> сам по себе <strong>не существует</strong> — нужен <em>ваш</em> Web Service.
+              </p>
+              <p class="text-sm text-muted" style="margin:0 0 10px;line-height:1.45;">
+                Render.com → <strong>+ New</strong> → <strong>Web Service</strong> → репозиторий с проектом →
+                <strong>Root Directory:</strong> <code>backend</code> → Build: <code>npm install</code> → Start: <code>node server.js</code> →
+                дождитесь <strong>Live</strong> → скопируйте URL сюда:
+              </p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <input type="url" class="input" id="apiUrlOverrideInput" placeholder="https://ваш-сервис.onrender.com" style="flex:1;min-width:220px;" />
+                <button type="button" class="btn btn-outline" id="apiUrlSaveBtn">Сохранить URL</button>
+                <button type="button" class="btn btn-outline" id="apiUrlTestBtn">Проверить</button>
+              </div>
+              <p id="apiUrlStatus" class="text-xs text-muted" style="margin:8px 0 0;"></p>
+            </div>
+
+            <div class="tabs" id="authTabs">
+              <button data-tab="login" class="active">Вход</button>
+              <button data-tab="register">Регистрация</button>
+            </div>
+
+            <form id="loginForm">
+              <h2 class="form-title">Вход</h2>
+              <p class="form-subtitle">Продолжите с существующим аккаунтом.</p>
+
+              <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" class="input" id="loginEmail" required placeholder="you@example.com" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Пароль</label>
+                <input type="password" class="input" id="loginPassword" required placeholder="••••••••" />
+              </div>
+
+              <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px;">
+                <i class="fa-solid fa-right-to-bracket"></i> Войти
+              </button>
+
+              <div class="auth-alt">
+                <span>Нет аккаунта?</span>
+                <a href="#" id="goToRegister">Зарегистрироваться</a>
+              </div>
+            </form>
+
+            <form id="registerForm" class="hidden">
+              <h2 class="form-title">Регистрация</h2>
+              <p class="form-subtitle">
+                Создайте аккаунт. Для теста можно выбрать роль «Команда сайта», чтобы увидеть админ-панель.
+              </p>
+
+              <div class="form-group">
+                <label class="form-label">Имя и фамилия</label>
+                <input type="text" class="input" id="regName" required placeholder="Иван Иванов" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" class="input" id="regEmail" required placeholder="you@example.com" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Пароль</label>
+                <input type="password" class="input" id="regPassword" required placeholder="Придумайте пароль" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Роль</label>
+                <select class="select" id="regRole">
+                  <option value="volunteer">Волонтер</option>
+                  <option value="seeker">Нуждающийся</option>
+                </select>
+              </div>
+
+              <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px;">
+                <i class="fa-solid fa-user-plus"></i> Создать аккаунт
+              </button>
+
+              <div class="auth-alt">
+                <span>Уже есть аккаунт?</span>
+                <a href="#" id="goToLogin">Войти</a>
+              </div>
+            </form>
+          </article>
+        </section>
+      </section>
+
+      <!-- Заблокированный пользователь -->
+      <section id="page-banned" class="hidden">
+        <section class="section" style="text-align:center; padding: 60px 20px;">
+          <h1 class="section-title" style="color: #c0392b;">Доступ ограничен</h1>
+          <p class="section-subtitle" id="bannedMessage" style="max-width: 500px; margin: 20px auto;">
+            Ваш аккаунт заблокирован. Для уточнения причин обратитесь в службу поддержки или команду сайта.
+          </p>
+          <button type="button" class="btn btn-primary" id="bannedLogoutBtn" style="margin-top: 16px;">
+            <i class="fa-solid fa-right-from-bracket"></i> Выйти
+          </button>
+        </section>
+      </section>
+
+      <!-- ADMIN / КОМАНДА САЙТА -->
+      <section id="page-admin" class="hidden">
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Команда сайта</h2>
+              <p class="section-subtitle">
+                Модерация заявок и жалоб, управление баллами и блокировками.
+                Доступно только пользователям с ролью «Команда сайта».
+              </p>
+            </div>
+          </div>
+
+          <div class="card mb-sm" style="padding:14px 16px;margin-bottom:16px;" id="adminStatsPanel">
+            <div class="text-sm text-muted" id="adminStatsText">Загрузка статистики…</div>
+            <div class="mt-sm" style="display:flex;flex-wrap:wrap;gap:8px;">
+              <button type="button" class="btn btn-outline" id="adminExportRequestsBtn">Скачать заявки (CSV)</button>
+              <button type="button" class="btn btn-outline" id="adminExportUsersBtn">Скачать пользователей (CSV)</button>
+            </div>
+          </div>
+
+          <div class="layout-two-columns">
+            <div>
+              <h3 class="text-sm" style="margin:4px 0;">Новые заявки (требуют верификации)</h3>
+              <table id="adminRequestsTable">
+                <thead>
+                <tr>
+                  <th>Заголовок</th>
+                  <th>Тип</th>
+                  <th>Город / срочность</th>
+                  <th>Автор (email)</th>
+                  <th>Статус</th>
+                  <th>Действия</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+
+              <h3 class="text-sm" style="margin:14px 0 4px;">Жалобы на пользователей</h3>
+              <table id="adminComplaintsTable">
+                <thead>
+                <tr>
+                  <th>На кого</th>
+                  <th>От кого</th>
+                  <th>Комментарий</th>
+                  <th>Статус</th>
+                  <th>Действия</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+
+              <h3 class="text-sm" style="margin:14px 0 4px;">Пользователи с блокировками и ограничениями</h3>
+              <div class="tabs mb-sm" id="adminUsersTabs" style="margin-bottom:8px;">
+                <button type="button" data-tab="blocked" class="active">Заблокированные</button>
+                <button type="button" data-tab="limited">С ограничениями</button>
+                <button type="button" data-tab="all">Все с мерами</button>
+              </div>
+              <table id="adminUsersLimitedTable">
+                <thead>
+                  <tr>
+                    <th>Пользователь</th>
+                    <th>Статус / меры</th>
+                    <th>Баллы</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <aside class="sidebar-card">
+              <h3>Управление пользователями</h3>
+              <p class="text-xs">
+                Введите email пользователя, чтобы изменить его баллы или статус блокировки, либо найдите по части email.
+              </p>
+              <form id="adminUserForm" class="mt-sm">
+                <div class="form-group">
+                  <label class="form-label">Email пользователя</label>
+                  <input class="input" id="adminUserEmail" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Найти пользователя по email</label>
+                  <div style="display:flex;gap:6px;">
+                    <input class="input" id="adminUserSearchEmail" placeholder="Часть email" />
+                    <button type="button" class="btn btn-outline" id="adminUserSearchBtn">Найти</button>
+                  </div>
+                  <div class="text-xs text-muted" id="adminUserSearchResult" style="margin-top:4px;"></div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Изменить баллы (можно отрицательное число)</label>
+                  <input type="number" class="input" id="adminPointsDelta" value="0" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Статус</label>
+                  <select class="select" id="adminStatus">
+                    <option value="keep">Не менять</option>
+                    <option value="active">Активен</option>
+                    <option value="limited">Доступ ограничен</option>
+                    <option value="blocked">Заблокирован</option>
+                  </select>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px;">
+                  Применить изменения
+                </button>
+              </form>
+              <p class="text-xs mt-sm">
+                Изменения применяются на сервере и сохраняются в базе данных.
+              </p>
+            </aside>
+          </div>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <span>© 2026 VOLUNTIS. Данные хранятся в SQLite (`database.sqlite`) через Node.js сервер.</span>
+    </div>
+  </footer>
+
+  <!-- Колокольчик уведомлений -->
+  <div id="notificationBellWrap" class="notification-bell-wrap hidden" aria-live="polite">
+    <button type="button" id="notificationBellBtn" class="notification-bell-btn" aria-label="Уведомления" title="Уведомления">
+      <i class="fa-solid fa-bell"></i>
+      <span id="notificationBellBadge" class="notification-bell-badge hidden">0</span>
+    </button>
+    <div id="notificationPanel" class="notification-panel hidden">
+      <div class="notification-panel-title">Уведомления</div>
+      <ul id="notificationList" class="notification-list"></ul>
+      <p id="notificationEmpty" class="text-xs text-muted" style="padding:12px 14px;margin:0;display:none;">Нет новых уведомлений</p>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script>
+    // Дублирует meta[name=voluntis-api] — сработает, даже если config.js не загрузился
+    window.VOLUNTIS_RENDER_API = (function () {
+      var m = document.querySelector('meta[name="voluntis-api"]');
+      return m ? (m.getAttribute('content') || '').trim() : '';
+    })();
+  </script>
+  <script>
+    /*
+     * Клиент для бэкенда: fetch + JSON, токен в Authorization.
+     * Ориентир: localStorage/сессия → apiGet, apiPost → навигация → главная → дашборд → чат → профиль → админ → обработчики → старт.
+     */
+
+    // Ключи в localStorage: объект пользователя (без пароля) и строка токена для заголовка Authorization.
+    const SESSION_KEY = 'dr_session_user';
+    // ключ localStorage для JSON пользователя (без пароля), приходит с сервера после входа.
+    const TOKEN_KEY = 'dr_session_token';
+    const API_OVERRIDE_KEY = 'voluntis_api_override';
+    // ключ для строки токена; подставляем в заголовок Authorization: Bearer …
+
+    // Кто сейчас залогинен (после логина подтягиваем с сервера и кладём сюда).
+    let sessionUser = null;
+    // объект текущего залогиненного участника; null = гость.
+
+    // Если открыли чужую карточку с главной — сюда пишем id; иначе в профиле показываем себя.
+    let viewedUserId = null;
+    // id профиля, который смотрим (не свой); null — показываем себя.
+
+    // Какой диалог открыт в разделе «Чаты».
+    let chatActiveId = null;
+    // id выбранного чата; по нему подгружаются сообщения.
+
+    // Участники по chatId — чтобы при перерисовке не запрашивать /participants каждый раз.
+    let chatParticipantsCache = {};
+    // кэш участников по chatId, чтобы реже вызывать /participants.
+
+    // Для формы «новый чат»: полный список пользователей и кого выбрали кнопкой.
+    let chatNewUsersCache = null;
+    // кэш GET /api/users для поиска собеседника в «новом чате».
+    let chatNewSelectedUserId = null;
+    // выбранный в списке пользователь перед созданием диалога.
+
+    // -------------------------
+    // localStorage: сессия и токен
+    // -------------------------
+    function saveSession(user) {
+      // сериализуем user в localStorage для мгновенного UI при перезагрузке.
+      // Сохраняем то, что пришло с API после login/register (имя, роль, баллы…).
+      localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    }
+
+    function saveToken(tok) {
+      // хранение JWT/сессионного токена; пустой tok — удалить.
+      try {
+        if (!tok) localStorage.removeItem(TOKEN_KEY);
+        else localStorage.setItem(TOKEN_KEY, String(tok));
+      } catch { /* в приватном режиме браузера может быть запрет */ }
+    }
+
+    function loadSession() {
+      // восстановление объекта пользователя при старте приложения.
+      try {
+        const raw = localStorage.getItem(SESSION_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function loadToken() {
+      // чтение токена для apiGet/apiPost.
+      try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
+    }
+
+    function clearSession() {
+      // сброс сессии на клиенте + старый ключ dr_current_user_id.
+      // Полный выход: чистим и дублирующий ключ из старого кода, если остался.
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(TOKEN_KEY);
+      try {
+        localStorage.removeItem('dr_current_user_id');
+      } catch {}
+    }
+
+    // -------------------------
+    // Запросы к /api/* (GET и POST)
+    // -------------------------
+    function getStoredApiOverride() {
+      try {
+        return String(localStorage.getItem(API_OVERRIDE_KEY) || '')
+          .trim()
+          .replace(/\/$/, '');
+      } catch {
+        return '';
+      }
+    }
+
+    function setStoredApiOverride(url) {
+      const s = String(url || '').trim().replace(/\/$/, '');
+      try {
+        if (s) localStorage.setItem(API_OVERRIDE_KEY, s);
+        else localStorage.removeItem(API_OVERRIDE_KEY);
+      } catch {}
+      window.VOLUNTIS_API_BASE = s;
+    }
+
+    function initApiConfig() {
+      const isLocal = /^(localhost|127\.0\.0\.1)$/i.test(location.hostname);
+      if (isLocal) {
+        window.VOLUNTIS_API_BASE = '';
+        return;
+      }
+      const override = getStoredApiOverride();
+      if (override) {
+        window.VOLUNTIS_API_BASE = override;
+        return;
+      }
+      const metaEl = document.querySelector('meta[name="voluntis-api"]');
+      const fromMeta = metaEl ? (metaEl.getAttribute('content') || '') : '';
+      const candidates = [
+        window.VOLUNTIS_API_BASE,
+        window.VOLUNTIS_BACKEND_URL,
+        window.VOLUNTIS_RENDER_API,
+        fromMeta,
+      ];
+      for (const c of candidates) {
+        const s = String(c || '').trim().replace(/\/$/, '');
+        if (s && s !== 'https://YOUR-RENDER-URL.onrender.com') {
+          window.VOLUNTIS_API_BASE = s;
+          return;
+        }
+      }
+    }
+
+    function updateNetlifyApiSetupUi() {
+      const box = document.getElementById('netlifyApiSetup');
+      if (!box) return;
+      const onNetlify = /\.netlify\.app$/i.test(location.hostname);
+      box.classList.toggle('hidden', !onNetlify);
+      const inp = document.getElementById('apiUrlOverrideInput');
+      const cur = getStoredApiOverride() || getApiBase();
+      if (inp && !inp.value && cur) inp.value = cur;
+      const status = document.getElementById('apiUrlStatus');
+      if (onNetlify && status && !status.textContent && /voluntis-api\.onrender\.com/i.test(cur)) {
+        status.textContent =
+          'Этот адрес сейчас не работает. Создайте свой Web Service на Render и вставьте его URL.';
+        status.style.color = '#b45309';
+      }
+    }
+
+    async function testApiConnection() {
+      const status = document.getElementById('apiUrlStatus');
+      if (status) status.textContent = 'Проверка… (первый запуск Render может занять до 1 мин.)';
+      try {
+        const data = await apiGet('/api/health');
+        if (status) {
+          status.textContent = 'API работает: ' + JSON.stringify(data);
+          status.style.color = '#15803d';
+        }
+        return true;
+      } catch (e) {
+        if (status) {
+          status.textContent = e.message || String(e);
+          status.style.color = '#b91c1c';
+        }
+        return false;
+      }
+    }
+
+    function getApiBase() {
+      initApiConfig();
+      return String(window.VOLUNTIS_API_BASE || '').replace(/\/$/, '');
+    }
+
+    function apiUrl(path) {
+      const base = getApiBase();
+      const p = path.startsWith('/') ? path : '/' + path;
+      return base + p;
+    }
+
+    function apiErrorMessage(res, data) {
+      if (data && data.error) return data.error;
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('text/html')) {
+        return (
+          'Сервер вернул HTML вместо JSON. Вы загрузили на Netlify не ту папку. ' +
+          'Нужна только папка deploy-site (команда npm run build:netlify), не вся «дипломм». ' +
+          'И укажите URL Render на странице «Вход» → «Связь с API».'
+        );
+      }
+      if (res.status === 404) return 'API не найден (404). Проверьте BACKEND_URL и деплой на Render.';
+      if (res.status >= 500) return 'Сервер API недоступен (' + res.status + '). Подождите минуту (Render может «просыпаться»).';
+      return 'Ошибка API (' + res.status + ')';
+    }
+
+    function handleApiBanIfNeeded(res, msg) {
+      if (res.status === 403 && String(msg).toLowerCase().includes('заблокирован')) {
+        if (sessionUser) sessionUser.status = 'blocked';
+        updateHeader();
+        showPage('banned');
+        if (sessionUser) {
+          try { renderBannedPage(); } catch (_) {}
+        } else {
+          const m = document.getElementById('bannedMessage');
+          if (m) m.textContent = msg;
+        }
+      }
+    }
+
+    async function apiRequest(url, options) {
+      const token = loadToken();
+      const headers = Object.assign({}, options.headers || {});
+      if (token) headers.Authorization = 'Bearer ' + token;
+      let res;
+      try {
+        res = await fetch(apiUrl(url), Object.assign({}, options, { headers }));
+      } catch (_) {
+        const base = getApiBase();
+        if (base) {
+          throw new Error(
+            'Нет связи с API (' +
+              base +
+              '). На Render нет запущенного сервера по этому адресу или URL неверный. ' +
+              'Создайте Web Service (папка backend), дождитесь статуса Live, скопируйте URL и укажите его в блоке «Связь с API» на этой странице. ' +
+              'Проверка: откройте ' +
+              base +
+              '/api/health — должен быть JSON {"ok":true}.'
+          );
+        }
+        throw new Error(
+          'Не задан URL API. На странице входа укажите адрес Render (Web Service → URL) и нажмите «Сохранить URL».'
+        );
+      }
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+      if (!res.ok) {
+        const msg = apiErrorMessage(res, data);
+        handleApiBanIfNeeded(res, msg);
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    async function apiGet(url) {
+      return apiRequest(url, { method: 'GET' });
+    }
+
+    async function apiPost(url, body) {
+      return apiRequest(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+    }
+
+    // Текст на странице «заблокирован»: срок, причина, кто вынес решение (если API отдало).
+    async function renderBannedPage() {
+      const bannedMsgEl = document.getElementById('bannedMessage');
+      if (!bannedMsgEl) return;
+
+      // Сначала собираем строку из того, что уже есть в sessionUser (последний успешный ответ API).
+      let base = 'Ваш аккаунт заблокирован.';
+      if (sessionUser) {
+        if (sessionUser.banUntil && new Date(sessionUser.banUntil) > new Date()) {
+          base += ` до ${sessionUser.banUntil}.`;
+        } else if (sessionUser.status === 'blocked') {
+          base += ' Блокировка без срока окончания.';
+        }
+        if (sessionUser.banReason) {
+          base += ` Причина: ${sessionUser.banReason}.`;
+        }
+      }
+
+      // Потом дополняем из /api/users/me/ban-info (кто модерировал и когда), если запрос не упал.
+      let extra = '';
+      try {
+        const info = await apiGet('/api/users/me/ban-info');
+        if (info && (info.actorName || info.actorEmail || info.actionAt)) {
+          extra += '\n\nРешение принял: ';
+          extra += info.actorName ? info.actorName : 'модератор';
+          if (info.actorEmail) extra += ` (${info.actorEmail})`;
+          if (info.actionAt) extra += ` в ${info.actionAt}`;
+          if (info.actionDetails) {
+            const d = info.actionDetails;
+            if (d.action) extra += `, тип: ${d.action}`;
+            else if (d.punishmentType) extra += `, тип: ${d.punishmentType}`;
+          }
+        }
+      } catch (_) {
+        // если не удалось получить подробности — оставляем только базовый текст
+      }
+
+      bannedMsgEl.textContent =
+        base +
+        (extra ? extra : '') +
+        '\n\nЕсли вы считаете блокировку ошибочной, обратитесь в службу поддержки или команду сайта.';
+    }
+
+    function roleLabelRu(role) {
+      const r = String(role || '').trim().toLowerCase();
+      if (r === 'volunteer') return 'Волонтёр';
+      if (r === 'seeker') return 'Нуждающийся';
+      if (r === 'admin') return 'Команда сайта';
+      return 'Пользователь';
+    }
+
+    function isAdminUser(user) {
+      return !!(user && String(user.role || '').trim().toLowerCase() === 'admin');
+    }
+
+    async function refreshSessionFromServer() {
+      if (!loadToken()) return;
+      try {
+        const fresh = await apiGet('/api/users/me');
+        if (fresh && fresh.id) {
+          sessionUser = fresh;
+          saveSession(sessionUser);
+        }
+      } catch (_) {}
+    }
+
+    function resetChatNewSelection() {
+      chatNewSelectedUserId = null;
+      const hint = document.getElementById('chatNewSelectedHint');
+      if (hint) hint.textContent = 'Выберите человека в списке выше.';
+      document.querySelectorAll('#chatNewSearchResults .chat-new-pick-btn').forEach(b => b.classList.remove('active-pick'));
+    }
+
+    function renderChatNewSearchResults(needle) {
+      const ul = document.getElementById('chatNewSearchResults');
+      if (!ul) return;
+      if (!sessionUser || !Array.isArray(chatNewUsersCache)) {
+        ul.innerHTML = '';
+        return;
+      }
+      const n = (needle || '').toLowerCase().trim();
+      const list = chatNewUsersCache
+        .filter(u => u.id !== sessionUser.id && String(u.status || 'active') !== 'blocked')
+        .filter(
+          u =>
+            !n ||
+            String(u.email || '')
+              .toLowerCase()
+              .includes(n) ||
+            String(u.name || '')
+              .toLowerCase()
+              .includes(n)
+        );
+      ul.innerHTML = '';
+      list.slice(0, 60).forEach(u => {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-new-pick-btn';
+        btn.dataset.userId = String(u.id);
+        btn.textContent = `${u.name} (${roleLabelRu(u.role)}) — ${u.email}`;
+        if (chatNewSelectedUserId === u.id) btn.classList.add('active-pick');
+        li.appendChild(btn);
+        ul.appendChild(li);
+      });
+      if (!list.length) {
+        const li = document.createElement('li');
+        li.className = 'text-xs text-muted';
+        li.style.padding = '10px 12px';
+        li.style.listStyle = 'none';
+        li.textContent = n
+          ? 'Никого не найдено — уточните запрос.'
+          : chatNewUsersCache.filter(u => u.id !== sessionUser.id).length === 0
+            ? 'Пока нет других пользователей. Зарегистрируйте второй аккаунт или дождитесь новых участников.'
+            : 'Введите часть имени или email, чтобы сузить список.';
+        ul.appendChild(li);
+      }
+    }
+
+    async function loadChatNewUsersCache() {
+      if (!sessionUser) return;
+      try {
+        chatNewUsersCache = await apiGet('/api/users');
+      } catch {
+        chatNewUsersCache = [];
+      }
+    }
+
+    function formatAvg(sum, cnt) {
+      if (!cnt) return '0.0';
+      return (sum / cnt).toFixed(1);
+    }
+
+    function requireLogin() {
+      if (!sessionUser) {
+        alert('Нужно войти или зарегистрироваться.');
+        showPage('auth');
+        return false;
+      }
+      if (sessionUser.status === 'blocked' || (sessionUser.banUntil && new Date(sessionUser.banUntil) > new Date())) {
+        showPage('banned');
+        // пытаемся показать подробности блокировки
+        renderBannedPage().catch(() => {});
+        return false;
+      }
+      return true;
+    }
+
+    // -------------------------
+    // Навигация: одна страница без перезагрузки (показываем/прячем блоки #page-*)
+    // -------------------------
+    const pages = ['home', 'dashboard', 'chat', 'profile', 'rules', 'auth', 'admin', 'banned'];
+
+    // Открыта ли сейчас выпадашка уведомлений (чтобы клик по документу её закрыл).
+    let notificationPanelOpen = false;
+
+    // Запрос GET /api/notifications/summary: рисуем бейдж и список; при клике по пункту переходим на нужную страницу SPA.
+    async function refreshNotifications() {
+      const wrap = document.getElementById('notificationBellWrap');
+      const badge = document.getElementById('notificationBellBadge');
+      const list = document.getElementById('notificationList');
+      const empty = document.getElementById('notificationEmpty');
+      if (!wrap) return;
+      if (!sessionUser) {
+        wrap.classList.add('hidden');
+        return;
+      }
+      wrap.classList.remove('hidden');
+      try {
+        const data = await apiGet('/api/notifications/summary');
+        const total = data.total || 0;
+        const items = data.items || [];
+        if (total > 0) {
+          badge.textContent = total > 99 ? '99+' : String(total);
+          badge.classList.remove('hidden');
+        } else {
+          badge.classList.add('hidden');
+        }
+        list.innerHTML = '';
+        if (!items.length) {
+          empty.style.display = 'block';
+        } else {
+          empty.style.display = 'none';
+          items.forEach(it => {
+            const li = document.createElement('li');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = it.text;
+            btn.addEventListener('click', () => {
+              notificationPanelOpen = false;
+              document.getElementById('notificationPanel').classList.add('hidden');
+              showPage(it.page || 'home');
+            });
+            li.appendChild(btn);
+            list.appendChild(li);
+          });
+        }
+      } catch (_) {}
+    }
+
+    // Переключение видимости секций page-* и подсветка кнопок навбара; для части страниц вызываем render* при открытии.
+    function showPage(page) {
+      // SPA — показ одной секции #page-*, подсветка навбара, ленивый вызов render*.
+      pages.forEach(p => {
+        const el = document.getElementById('page-' + p);
+        if (el) el.classList.toggle('hidden', p !== page);
+        const btn = document.getElementById('mainNav').querySelector('[data-page="' + p + '"]');
+        if (btn) btn.classList.toggle('active', p === page);
+      });
+
+      window.scrollTo(0, 0);
+
+      // Ленивая подгрузка
+      if (page === 'home') {
+        renderHomeDirectory();
+        renderHomeTop();
+      }
+      if (page === 'dashboard') renderDashboard();
+      if (page === 'chat') renderChat();
+      if (page === 'profile') renderProfile();
+      if (page === 'admin') renderAdmin();
+      if (page === 'auth') updateNetlifyApiSetupUi();
+      if (sessionUser) refreshNotifications();
+    }
+
+    // Шапка: имя, роль, баллы; кнопки выхода и админки; колокольчик только для залогиненных.
+    function updateHeader() {
+      const label = document.getElementById('currentUserLabel');
+      const logoutBtn = document.getElementById('logoutBtn');
+      const adminNavBtn = document.getElementById('adminNavBtn');
+      const adminPanelBtn = document.getElementById('adminPanelBtn');
+      const authNavBtn = document.getElementById('authNavBtn');
+      const isAdmin = isAdminUser(sessionUser);
+
+      if (!sessionUser) {
+        label.textContent = 'Неавторизован';
+        logoutBtn.classList.add('hidden');
+        if (adminNavBtn) adminNavBtn.classList.add('hidden');
+        if (adminPanelBtn) {
+          adminPanelBtn.classList.add('hidden');
+          adminPanelBtn.style.display = 'none';
+        }
+        if (authNavBtn) authNavBtn.classList.remove('hidden');
+        const nw = document.getElementById('notificationBellWrap');
+        if (nw) nw.classList.add('hidden');
+        return;
+      }
+
+      label.textContent = `${sessionUser.name} (${roleLabelRu(sessionUser.role)}) · баллы: ${sessionUser.points}`;
+      logoutBtn.classList.remove('hidden');
+      if (authNavBtn) authNavBtn.classList.add('hidden');
+      if (adminNavBtn) {
+        adminNavBtn.classList.toggle('hidden', !isAdmin);
+        adminNavBtn.setAttribute('aria-hidden', isAdmin ? 'false' : 'true');
+      }
+      if (adminPanelBtn) {
+        adminPanelBtn.classList.toggle('hidden', !isAdmin);
+        adminPanelBtn.style.display = isAdmin ? '' : 'none';
+        adminPanelBtn.setAttribute('aria-hidden', isAdmin ? 'false' : 'true');
+      }
+      refreshNotifications();
+    }
+
+    // -------------------------
+    // Типы помощи (их много)
+    // -------------------------
+    const HELP_TYPES = [
+      { id: 'groceries', label: 'Продукты', icon: 'fa-bag-shopping' },
+      { id: 'medicine', label: 'Аптека', icon: 'fa-kit-medical' },
+      { id: 'walk', label: 'Прогулка/животные', icon: 'fa-dog' },
+      { id: 'education', label: 'Обучение/наставничество', icon: 'fa-book-open' },
+      { id: 'physical', label: 'Физическая помощь', icon: 'fa-people-carry-box' },
+      { id: 'material', label: 'Материальная помощь', icon: 'fa-box-open' },
+      { id: 'psychological', label: 'Психологическая поддержка', icon: 'fa-brain' },
+      { id: 'financial', label: 'Финансовая помощь', icon: 'fa-hand-holding-dollar' },
+      { id: 'legal', label: 'Юридическая помощь', icon: 'fa-scale-balanced' },
+      { id: 'transport', label: 'Транспорт/подвезти', icon: 'fa-car-side' },
+      { id: 'household', label: 'Бытовая помощь', icon: 'fa-broom' },
+      { id: 'care', label: 'Уход/сопровождение', icon: 'fa-person-cane' },
+      { id: 'events', label: 'Помощь на мероприятиях', icon: 'fa-calendar-check' },
+      { id: 'documents', label: 'Документы/заявления', icon: 'fa-file-signature' },
+      { id: 'it', label: 'Техподдержка/IT', icon: 'fa-laptop' },
+      { id: 'donation', label: 'Сбор вещей/донаты', icon: 'fa-hand-holding-heart' }
+    ];
+
+    function typeLabel(typeId) {
+      // русская подпись типа помощи по id из массива HELP_TYPES.
+      const t = HELP_TYPES.find(x => x.id === typeId);
+      return t ? t.label : typeId;
+    }
+
+    function urgencyLabelRu(u) {
+      // подпись срока «когда нужна помощь» для карточек и форм.
+      if (u === 'today') return 'Срочно';
+      if (u === 'week') return 'На неделе';
+      return 'Гибко';
+    }
+
+    function volunteerCityQuery() {
+      // читает поле города у волонтёра для фильтрации заявок на дашборде.
+      const el = document.getElementById('dashboardCityFilter');
+      const v = el && el.value ? el.value.trim().toLowerCase() : '';
+      return v;
+    }
+
+    // -------------------------
+    // Главная: список людей
+    // -------------------------
+    async function renderHomeDirectory() {
+      // сетка «люди рядом» — GET /api/users с учётом роли текущего пользователя.
+      const titleEl = document.getElementById('homeDirectoryTitle');
+      const subtitleEl = document.getElementById('homeDirectorySubtitle');
+      const gridEl = document.getElementById('homeDirectoryGrid');
+
+      gridEl.innerHTML = '<p class="text-muted text-sm">Загрузка...</p>';
+
+      try {
+        let roleToShow = null;
+        if (!sessionUser) {
+          titleEl.textContent = 'Люди рядом';
+          subtitleEl.textContent = 'Войдите, чтобы видеть больше функций (чаты, заявки, профиль). Пока показываем примеры.';
+          // покажем всех подряд (но ограничим)
+          roleToShow = null;
+        } else if (sessionUser.role === 'seeker') {
+          titleEl.textContent = 'Волонтёры рядом';
+          subtitleEl.textContent = 'Нажмите на профиль волонтёра — можно написать и оценить.';
+          roleToShow = 'volunteer';
+        } else if (sessionUser.role === 'volunteer') {
+          titleEl.textContent = 'Нуждающиеся рядом';
+          subtitleEl.textContent = 'Нажмите на профиль — можно написать и уточнить детали.';
+          roleToShow = 'seeker';
+        } else {
+          titleEl.textContent = 'Пользователи';
+          subtitleEl.textContent = 'Вы админ, можете смотреть пользователей и заявки.';
+          roleToShow = null;
+        }
+
+        const url = roleToShow ? ('/api/users?role=' + encodeURIComponent(roleToShow)) : '/api/users';
+        const users = await apiGet(url);
+
+        const filtered = users
+          .filter(u => !sessionUser || u.id !== sessionUser.id)
+          .filter(u => u.status !== 'blocked')
+          .slice(0, 24);
+
+        if (!filtered.length) {
+          gridEl.innerHTML = '<p class="text-muted text-sm">Пока никого нет.</p>';
+          return;
+        }
+
+        gridEl.innerHTML = '';
+
+        filtered.forEach(u => {
+          const avg = formatAvg(u.ratingSum, u.ratingCount);
+          const card = document.createElement('article');
+          card.className = 'card';
+          card.innerHTML = `
+            <div class="card-header">
+              <h3 class="card-title">${u.name}</h3>
+              <span class="tag">${roleLabelRu(u.role)}</span>
+            </div>
+            <p class="card-body">
+              Email: ${u.email}<br/>
+              Баллы: <strong>${u.points}</strong><br/>
+              Рейтинг: <strong>${avg}</strong>
+            </p>
+            <div class="card-footer">
+              <button class="btn btn-outline btn-view-profile" data-user-id="${u.id}">
+                <i class="fa-regular fa-id-card"></i> Профиль
+              </button>
+              <button class="btn btn-primary btn-message" data-user-id="${u.id}">
+                <i class="fa-solid fa-message"></i> Написать
+              </button>
+            </div>
+          `;
+          gridEl.appendChild(card);
+        });
+      } catch (e) {
+        gridEl.innerHTML = '<p class="text-muted text-sm">Ошибка: ' + e.message + '</p>';
+      }
+    }
+
+    // -------------------------
+    // Главная: топ волонтёров
+    // -------------------------
+    async function renderHomeTop() {
+      // топ волонтёров с GET /api/top/volunteers.
+      const gridEl = document.getElementById('homeTopGrid');
+      if (!gridEl) return;
+      gridEl.innerHTML = '<p class="text-muted text-sm">Загрузка...</p>';
+      try {
+        const rows = await apiGet('/api/top/volunteers?limit=10');
+        if (!rows.length) {
+          gridEl.innerHTML = '<p class="text-muted text-sm">Пока нет волонтёров в рейтинге.</p>';
+          return;
+        }
+        gridEl.innerHTML = '';
+        rows.forEach((u, idx) => {
+          const card = document.createElement('article');
+          card.className = 'card';
+          const avg = formatAvg(u.ratingSum, u.ratingCount);
+          card.innerHTML = `
+            <div class="card-header">
+              <h3 class="card-title">#${idx + 1} — ${u.name}</h3>
+              <span class="tag green"><i class="fa-solid fa-bolt"></i> ${u.points || 0}</span>
+            </div>
+            <p class="card-body text-sm text-muted">
+              Дел: <strong>${u.completed || 0}</strong><br/>
+              Рейтинг: <strong>${avg}</strong><br/>
+              Город: <strong>${u.city ? u.city : '—'}</strong>
+            </p>
+            <div class="card-footer">
+              <span class="text-xs text-muted">${u.email}</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+                <button class="btn btn-outline btn-open-user" data-user-id="${u.id}" type="button">
+                  <i class="fa-regular fa-id-card"></i> Профиль
+                </button>
+                <button class="btn btn-outline btn-start-chat" data-user-id="${u.id}" type="button">
+                  <i class="fa-solid fa-message"></i> Написать
+                </button>
+              </div>
+            </div>
+          `;
+          gridEl.appendChild(card);
+        });
+      } catch (e) {
+        gridEl.innerHTML = '<p class="text-muted text-sm">Ошибка: ' + e.message + '</p>';
+      }
+    }
+
+    document.getElementById('homeDirectoryGrid').addEventListener('click', async e => {
+      const viewBtn = e.target.closest('.btn-view-profile');
+      const msgBtn = e.target.closest('.btn-message');
+      const openUserBtn = e.target.closest('.btn-open-user');
+      const chatBtn = e.target.closest('.btn-start-chat');
+      if (viewBtn) {
+        const id = parseInt(viewBtn.dataset.userId, 10);
+        viewedUserId = id;
+        showPage('profile');
+      }
+      if (msgBtn) {
+        const id = parseInt(msgBtn.dataset.userId, 10);
+        if (!requireLogin()) return;
+        await startChatWith(id);
+      }
+      if (openUserBtn) {
+        const id = parseInt(openUserBtn.dataset.userId, 10);
+        if (id) {
+          viewedUserId = id;
+          showPage('profile');
+        }
+      }
+      if (chatBtn) {
+        const id = parseInt(chatBtn.dataset.userId, 10);
+        if (!requireLogin()) return;
+        await startChatWith(id);
+      }
+    });
+
+    document.getElementById('homeTopGrid').addEventListener('click', async e => {
+      const openUserBtn = e.target.closest('.btn-open-user');
+      const chatBtn = e.target.closest('.btn-start-chat');
+      if (openUserBtn) {
+        const id = parseInt(openUserBtn.dataset.userId, 10);
+        if (id) {
+          viewedUserId = id;
+          showPage('profile');
+        }
+      }
+      if (chatBtn) {
+        const id = parseInt(chatBtn.dataset.userId, 10);
+        if (!requireLogin()) return;
+        await startChatWith(id);
+      }
+    });
+
+    document.getElementById('homeDirectoryRefreshBtn').addEventListener('click', () => {
+      renderHomeDirectory();
+    });
+
+    document.getElementById('homeTopRefreshBtn').addEventListener('click', () => {
+      renderHomeTop();
+    });
+
+    // -------------------------
+    // Dashboard: заявки
+    // -------------------------
+    // dashFilter — id типа помощи или 'all'; dashSearch — подстрока в заголовке/описании/городе;
+    // dashDifficulty — фильтр по числу 1..5 или 'all'; dashTab — какой набор заявок грузим с API.
+    let dashFilter = 'all';
+    // фильтр по типу помощи; 'all' — все типы.
+    let dashSearch = '';
+    // подстрока поиска по полям заявки на клиенте.
+    let dashDifficulty = 'all';
+    // сложность 1–5 или 'all'.
+    let dashTab = 'active';
+    // вкладка: какой набор заявок запрашивать (ожидающие / активные / завершённые).
+
+    /*
+     * renderDashboard: подбирает заголовки под роль, тянет заявки с разных URL в зависимости от dashTab,
+     * фильтрует на клиенте, строит карточки (innerHTML кусками) и кнопки действий по правилам роли и статуса заявки.
+     */
+    async function renderDashboard() {
+      // заголовки, список заявок, видимость формы; данные с API по роли и вкладке.
+      const titleEl = document.getElementById('dashboardTitle');
+      const subtitleEl = document.getElementById('dashboardSubtitle');
+      const listEl = document.getElementById('dashboardList');
+      const requestFormWrap = document.getElementById('requestForm').parentElement;
+      if (!sessionUser) {
+        titleEl.textContent = 'Заявки';
+        subtitleEl.textContent = 'Войдите, чтобы откликаться и создавать заявки.';
+        requestFormWrap.classList.add('hidden');
+      } else if (sessionUser.role === 'volunteer') {
+        titleEl.textContent = 'Заявки (одобренные)';
+        subtitleEl.textContent = 'Выберите заявку и нажмите «Начать помогать». Нуждающийся подтвердит — после этого можно завершить дело по согласию обоих.';
+        requestFormWrap.classList.add('hidden');
+      } else if (sessionUser.role === 'seeker') {
+        titleEl.textContent = 'Мои заявки';
+        subtitleEl.textContent =
+          'Укажите город и сроки — так волонтёрам проще откликнуться. До 5 активных заявок (на проверке или в работе). Завершение только по согласию с волонтёром.';
+        requestFormWrap.classList.remove('hidden');
+        const rc = document.getElementById('reqCity');
+        if (rc && sessionUser.city && !rc.value) rc.value = sessionUser.city;
+      } else {
+        titleEl.textContent = 'Обзор заявок';
+        subtitleEl.textContent = 'Проверка заявок в разделе «Команда сайта».';
+        requestFormWrap.classList.add('hidden');
+      }
+
+      listEl.innerHTML = '<p class="text-muted text-sm">Загрузка...</p>';
+
+      const cityWrap = document.getElementById('dashboardCityWrap');
+      if (cityWrap) {
+        const showCity =
+          sessionUser &&
+          sessionUser.role === 'volunteer' &&
+          (dashTab === 'active' || dashTab === 'completed');
+        cityWrap.style.display = showCity ? 'block' : 'none';
+      }
+
+      try {
+        const vCity = volunteerCityQuery();
+        let items = [];
+        if (dashTab === 'pending') {
+          if (sessionUser && sessionUser.role === 'admin') {
+            items = await apiGet('/api/admin/requests/pending');
+          } else if (sessionUser && sessionUser.role === 'seeker') {
+            const byUser = await apiGet('/api/requests/by-user/' + sessionUser.id);
+            items = byUser.filter(r => r.status === 'pending');
+          } else {
+            items = [];
+          }
+        } else if (dashTab === 'completed') {
+          if (sessionUser && sessionUser.role === 'seeker') {
+            const byUser = await apiGet('/api/requests/by-user/' + sessionUser.id);
+            items = byUser.filter(r => r.completed);
+          } else {
+            let url = '/api/requests?completed=1';
+            if (sessionUser && sessionUser.role === 'volunteer' && vCity) url += '&city=' + encodeURIComponent(vCity);
+            items = await apiGet(url);
+          }
+        } else {
+          if (!sessionUser) {
+            items = await apiGet('/api/requests');
+          } else if (sessionUser.role === 'volunteer') {
+            let url = '/api/requests';
+            if (vCity) url += '?city=' + encodeURIComponent(vCity);
+            items = await apiGet(url);
+          } else if (sessionUser.role === 'seeker') {
+            const byUser = await apiGet('/api/requests/by-user/' + sessionUser.id);
+            items = byUser.filter(r => r.status === 'approved' && !r.completed && !r.cancelled);
+          } else {
+            items = await apiGet('/api/requests');
+          }
+          items = items.filter(r => !r.completed && r.status === 'approved' && !r.cancelled);
+        }
+
+        if (dashFilter !== 'all') items = items.filter(r => r.type === dashFilter);
+        if (dashDifficulty !== 'all') {
+          const dVal = parseInt(dashDifficulty, 10);
+          if (!isNaN(dVal)) items = items.filter(r => parseInt(r.difficulty || 0, 10) === dVal);
+        }
+        if (dashSearch.trim()) {
+          const q = dashSearch.toLowerCase();
+          items = items.filter(r =>
+            String(r.title || '').toLowerCase().includes(q) ||
+            String(r.description || '').toLowerCase().includes(q) ||
+            String(r.requestCity || '').toLowerCase().includes(q)
+          );
+        }
+
+        if (!items.length) {
+          listEl.innerHTML = '<p class="text-muted text-sm">Заявок нет.</p>';
+          return;
+        }
+
+        const allUsers = await apiGet('/api/users');
+        const userMap = {};
+        allUsers.forEach(u => userMap[u.id] = u);
+
+        listEl.innerHTML = '';
+
+        items.forEach(r => {
+          const creator = userMap[r.createdBy];
+          const vol = r.assignedVolunteerId ? userMap[r.assignedVolunteerId] : null;
+
+          const statusLabel =
+            r.status === 'pending' ? 'На проверке' :
+            r.status === 'approved' ? 'Одобрена' :
+            'Отклонена';
+
+          const statusClass = (r.status === 'approved') ? 'tag green' : 'tag';
+
+          let actions = '';
+          // 1) волонтёр начинает помогать (это ещё НЕ завершение и НЕ начисление баллов)
+          if (sessionUser && sessionUser.role === 'volunteer' && r.status === 'approved' && !r.assignedVolunteerId && !r.completed) {
+            actions += `<button class="btn btn-primary btn-start-help" data-id="${r.id}">
+              <i class="fa-solid fa-hand-holding-heart"></i> Начать помогать
+            </button>`;
+          }
+
+          // 2) нуждающийся принимает помощь, если волонтёр уже начал
+          if (sessionUser && sessionUser.role === 'seeker' && r.status === 'approved' && !r.completed) {
+            if (r.assignedVolunteerId && Number(r.helpAccepted || 0) === 0) {
+              actions += `<button class="btn btn-primary btn-accept-help" data-id="${r.id}">
+                <i class="fa-solid fa-circle-check"></i> Принять помощь
+              </button>`;
+            }
+          }
+
+          // 3) завершение по согласию ОБОИХ (волонтёр и нуждающийся)
+          if (sessionUser && r.status === 'approved' && !r.completed && Number(r.helpAccepted || 0) === 1) {
+            const isVol = (r.assignedVolunteerId === sessionUser.id);
+            const isSeeker = (r.createdBy === sessionUser.id);
+            if (isVol || isSeeker) {
+              actions += `<button class="btn btn-outline btn-finish" data-id="${r.id}">
+                <i class="fa-solid fa-flag-checkered"></i> Завершить дело
+              </button>`;
+            }
+          }
+
+          // 4) отмена начатого дела (до завершения)
+          if (sessionUser && r.status === 'approved' && !r.completed) {
+            const isVol = (r.assignedVolunteerId === sessionUser.id);
+            const isSeeker = (r.createdBy === sessionUser.id);
+            if ((isVol || isSeeker) && !Number(r.cancelled || 0)) {
+              actions += `<button class="btn btn-outline btn-cancel" data-id="${r.id}">
+                <i class="fa-solid fa-ban"></i> Отменить дело
+              </button>`;
+            }
+          }
+
+          // 5) жалоба (на автора или на волонтёра)
+          if (sessionUser && sessionUser.role !== 'admin') {
+            if (creator && creator.id !== sessionUser.id) {
+              actions += `<button class="btn btn-outline btn-complain-user" data-user-id="${creator.id}" data-req-id="${r.id}" type="button">
+                <i class="fa-solid fa-triangle-exclamation"></i> Пожаловаться на автора
+              </button>`;
+            }
+            if (vol && vol.id !== sessionUser.id) {
+              actions += `<button class="btn btn-outline btn-complain-user" data-user-id="${vol.id}" data-req-id="${r.id}" type="button">
+                <i class="fa-solid fa-triangle-exclamation"></i> Пожаловаться на волонтёра
+              </button>`;
+            }
+          }
+
+          // статусы (чтобы было понятно, что происходит)
+          if (!r.completed && r.assignedVolunteerId && Number(r.helpAccepted || 0) === 0 && r.status === 'approved') {
+            actions += `<span class="tag">Ожидается подтверждение нуждающегося</span>`;
+          }
+          if (Number(r.cancelled || 0)) {
+            actions += `<span class="tag">Отменено</span>`;
+            if (r.cancelReason) actions += `<span class="text-xs text-muted" style="display:block;max-width:280px;">Причина: ${String(r.cancelReason)}</span>`;
+          }
+          if (!r.completed && Number(r.helpAccepted || 0) === 1 && r.status === 'approved') {
+            const fv = Number(r.finishedVolunteer || 0);
+            const fs = Number(r.finishedSeeker || 0);
+            if (fv && !fs) actions += `<span class="tag">Волонтёр готов завершить (ждём нуждающегося)</span>`;
+            if (!fv && fs) actions += `<span class="tag">Нуждающийся готов завершить (ждём волонтёра)</span>`;
+            if (fv && fs) actions += `<span class="tag green">Оба подтвердили завершение</span>`;
+          }
+          if (r.completed) actions += `<span class="tag green"><i class="fa-solid fa-check"></i> Завершено</span>`;
+
+          const canTimeline =
+            sessionUser &&
+            (sessionUser.role === 'admin' ||
+              r.createdBy === sessionUser.id ||
+              r.assignedVolunteerId === sessionUser.id);
+          const recNote = r.recurringNote ? String(r.recurringNote).replace(/</g, '&lt;') : '';
+
+          const card = document.createElement('article');
+          card.className = 'card';
+          card.innerHTML = `
+            <div class="card-header">
+              <h3 class="card-title">${r.title}</h3>
+              <span class="${statusClass}">${statusLabel}</span>
+            </div>
+            <p class="card-body">${r.description}</p>
+            <div class="card-footer">
+              <span class="text-xs text-muted">
+                Тип: ${typeLabel(r.type)}<br/>
+                Город: ${(r.requestCity || '—').replace(/</g, '&lt;')} · Срочность: ${urgencyLabelRu(r.urgency)}<br/>
+                ${r.neededAt ? `Когда удобно: ${String(r.neededAt).replace(/</g, '&lt;')}<br/>` : ''}
+                ${Number(r.recurring) ? `<span class="tag" style="display:inline-block;margin:2px 0;">Повторяющаяся нужда</span>${recNote ? ': ' + recNote : ''}<br/>` : ''}
+                Сложность: ${r.difficulty || 1} (баллы: ${r.pointsToAdd || 5})<br/>
+                Автор: ${creator ? creator.email : '—'}<br/>
+                Волонтёр: ${vol ? vol.name : 'пока нет'}
+              </span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+                ${actions}
+                ${canTimeline ? `<button type="button" class="btn btn-outline btn-request-timeline" data-id="${r.id}" style="font-size:11px;padding:4px 8px;">История статусов</button>` : ''}
+                ${creator ? `<button class="btn btn-outline btn-open-user" data-user-id="${creator.id}" type="button"><i class="fa-regular fa-id-card"></i> Профиль автора</button>` : ``}
+                ${vol ? `<button class="btn btn-outline btn-open-user" data-user-id="${vol.id}" type="button"><i class="fa-regular fa-id-card"></i> Профиль волонтёра</button>` : ``}
+              </div>
+            </div>
+            <div class="req-timeline-inline hidden" id="reqTimelineBox-${r.id}"></div>
+          `;
+          listEl.appendChild(card);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<p class="text-muted text-sm">Ошибка: ' + e.message + '</p>';
+      }
+    }
+
+    // -------------------------
+    // Чат
+    // -------------------------
+    async function startChatWith(otherUserId) {
+      // создаём или находим чат с пользователем otherUserId, открываем раздел «Чаты».
+      try {
+        const out = await apiPost('/api/chats/create', { aId: sessionUser.id, bId: otherUserId });
+        chatActiveId = out.chatId;
+        delete chatParticipantsCache[chatActiveId];
+        resetChatNewSelection();
+        const inp = document.getElementById('chatNewUserSearch');
+        if (inp) inp.value = '';
+        renderChatNewSearchResults('');
+        await renderChat();
+        showPage('chat');
+      } catch (e) {
+        alert('Не получилось создать чат: ' + e.message);
+      }
+    }
+
+    async function renderChat() {
+      // список диалогов, сообщения, поиск по истории, UI «новый чат».
+      const panel = document.getElementById('chatNewchatPanel');
+      const contactsEl = document.getElementById('chatContacts');
+      const messagesEl = document.getElementById('chatMessages');
+      const activeNameEl = document.getElementById('chatActiveName');
+      const activeSubEl = document.getElementById('chatActiveSubtitle');
+      const searchInput = document.getElementById('chatSearchInput');
+      const searchBtn = document.getElementById('chatSearchBtn');
+      const clearBtn = document.getElementById('chatSearchClearBtn');
+
+      contactsEl.innerHTML = '';
+      messagesEl.innerHTML = '';
+
+      if (!sessionUser) {
+        if (panel) panel.classList.add('hidden');
+        contactsEl.innerHTML = '<li class="text-xs text-muted">Войдите, чтобы пользоваться чатом.</li>';
+        activeNameEl.textContent = 'Нет авторизации';
+        activeSubEl.textContent = 'Сначала войдите.';
+        return;
+      }
+
+      if (panel) panel.classList.remove('hidden');
+      await loadChatNewUsersCache();
+      const searchNewEl = document.getElementById('chatNewUserSearch');
+      renderChatNewSearchResults(searchNewEl ? searchNewEl.value : '');
+
+      try {
+        const chatList = await apiGet('/api/chats?userId=' + sessionUser.id);
+        if (!chatList.length) {
+          const emptyLi = document.createElement('li');
+          emptyLi.className = 'text-xs text-muted';
+          emptyLi.textContent = 'Чатов пока нет. Создайте чат через форму выше или откликнитесь на заявку.';
+          contactsEl.appendChild(emptyLi);
+          activeNameEl.textContent = 'Чатов нет';
+          activeSubEl.textContent = '';
+          return;
+        }
+
+        if (!chatActiveId) chatActiveId = chatList[0].id;
+        if (!chatList.some(c => c.id === chatActiveId)) chatActiveId = chatList[0].id;
+
+        for (const c of chatList) {
+          let parts = chatParticipantsCache[c.id];
+          if (!parts) {
+            parts = await apiGet('/api/chats/' + c.id + '/participants');
+            chatParticipantsCache[c.id] = parts;
+          }
+          const other = parts.find(p => p.id !== sessionUser.id) || parts[0];
+
+          const li = document.createElement('li');
+          li.className = 'chat-contact' + (c.id === chatActiveId ? ' active' : '');
+          li.innerHTML = `
+            <div class="avatar">${other ? other.name.charAt(0) : '?'}</div>
+            <div class="meta">
+              <div><strong>${other ? other.name : 'Пользователь'}</strong></div>
+              <div class="text-xs text-muted">${other ? other.email : ''}</div>
+            </div>
+          `;
+          li.addEventListener('click', () => {
+            chatActiveId = c.id;
+            renderChat();
+          });
+          contactsEl.appendChild(li);
+        }
+
+        const parts = chatParticipantsCache[chatActiveId] || await apiGet('/api/chats/' + chatActiveId + '/participants');
+        chatParticipantsCache[chatActiveId] = parts;
+        const other = parts.find(p => p.id !== sessionUser.id) || parts[0];
+        activeNameEl.textContent = other ? other.name : 'Диалог';
+        activeSubEl.textContent = 'Сообщения сохраняются в базе данных.';
+
+        let query = (searchInput && searchInput.value) ? searchInput.value.trim() : '';
+        if (searchBtn && !searchBtn.dataset.bound) {
+          searchBtn.dataset.bound = '1';
+          searchBtn.addEventListener('click', () => renderChat());
+        }
+        if (clearBtn && !clearBtn.dataset.bound) {
+          clearBtn.dataset.bound = '1';
+          clearBtn.addEventListener('click', () => {
+            if (searchInput) searchInput.value = '';
+            renderChat();
+          });
+        }
+
+        const msgs = await apiGet('/api/chats/' + chatActiveId + '/messages' + (query ? ('?q=' + encodeURIComponent(query)) : ''));
+        messagesEl.innerHTML = '';
+        msgs.forEach(m => {
+          const row = document.createElement('div');
+          row.className = 'message-row ' + (m.fromUserId === sessionUser.id ? 'me' : 'them');
+          const bubble = document.createElement('div');
+          bubble.className = 'message-bubble ' + (m.fromUserId === sessionUser.id ? 'me' : 'them');
+          bubble.textContent = m.text;
+          const meta = document.createElement('div');
+          meta.className = 'text-xs';
+          meta.style.opacity = '0.7';
+          meta.style.marginTop = '6px';
+          const ts = m.createdAt ? String(m.createdAt) : '';
+          const read = m.readAt ? ' · прочитано' : '';
+          meta.textContent = ts + ((m.fromUserId === sessionUser.id) ? read : '');
+          bubble.appendChild(meta);
+          row.appendChild(bubble);
+          messagesEl.appendChild(row);
+        });
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } catch (e) {
+        const errLi = document.createElement('li');
+        errLi.className = 'text-xs text-muted';
+        errLi.textContent = 'Ошибка: ' + e.message;
+        contactsEl.appendChild(errLi);
+      }
+    }
+
+    // -------------------------
+    // Профили (свой/чужой)
+    // -------------------------
+    async function renderProfile() {
+      // профиль (свой или чужой по viewedUserId), отзывы, жалоба, кнопки действий.
+      const actionsEl = document.getElementById('profileActions');
+      const nameEl = document.getElementById('profileName');
+      const initialsEl = document.getElementById('profileInitials');
+      const roleEl = document.getElementById('profileRoleLabel');
+      const pointsEl = document.getElementById('profilePoints');
+      const completedEl = document.getElementById('profileCompleted');
+      const ratingEl = document.getElementById('profileRating');
+      const badgesEl = document.getElementById('profileBadges');
+      const reviewsEl = document.getElementById('profileReviews');
+
+      const cityEl = document.getElementById('profileCity');
+      const ageEl = document.getElementById('profileAge');
+      const aboutEl = document.getElementById('profileAbout');
+      const editBlockEl = document.getElementById('profileEditBlock');
+
+      const rateTargetIdEl = document.getElementById('rateTargetUserId');
+      const rateTargetEmailEl = document.getElementById('rateTargetEmail');
+
+      actionsEl.innerHTML = '';
+      editBlockEl.innerHTML = '';
+
+      if (!sessionUser) {
+        nameEl.textContent = 'Гость';
+        initialsEl.textContent = 'Г';
+        roleEl.textContent = 'Войдите, чтобы видеть профиль.';
+        pointsEl.textContent = '0';
+        completedEl.textContent = '0';
+        ratingEl.textContent = '0.0';
+        badgesEl.innerHTML = '';
+        reviewsEl.innerHTML = '<li class="text-xs text-muted">Нет данных</li>';
+        cityEl.textContent = '—';
+        ageEl.textContent = '—';
+        aboutEl.textContent = '—';
+        editBlockEl.innerHTML = '';
+        rateTargetIdEl.value = '';
+        rateTargetEmailEl.disabled = false;
+        return;
+      }
+
+      // Всегда обновляем данные текущего пользователя (баллы и т.п.)
+      try {
+        sessionUser = await apiGet('/api/users/' + sessionUser.id);
+        saveSession(sessionUser);
+        updateHeader();
+      } catch {}
+
+      // Кого показываем: себя или другого
+      let userToShow = sessionUser;
+      if (viewedUserId && viewedUserId !== sessionUser.id) {
+        try {
+          userToShow = await apiGet('/api/users/' + viewedUserId);
+        } catch {
+          userToShow = sessionUser;
+          viewedUserId = null;
+        }
+      }
+
+      nameEl.textContent = userToShow.name;
+      initialsEl.textContent = userToShow.name.split(' ').map(p => p[0]).join('').toUpperCase();
+      roleEl.textContent = roleLabelRu(userToShow.role) + (userToShow.id === sessionUser.id ? ' (вы)' : '');
+      pointsEl.textContent = userToShow.points || 0;
+      completedEl.textContent = userToShow.completed || 0;
+      ratingEl.textContent = formatAvg(userToShow.ratingSum, userToShow.ratingCount);
+
+      cityEl.textContent = userToShow.city ? userToShow.city : '—';
+      ageEl.textContent = userToShow.age ? String(userToShow.age) : '—';
+      aboutEl.textContent = userToShow.about ? userToShow.about : '—';
+
+      // Кнопки действий
+      if (userToShow.id !== sessionUser.id) {
+        actionsEl.innerHTML = `
+          <button class="btn btn-primary" id="profileMsgBtn" type="button">
+            <i class="fa-solid fa-message"></i> Написать
+          </button>
+          <button class="btn btn-primary" id="profileComplaintBtn" type="button">
+            <i class="fa-solid fa-triangle-exclamation"></i> Пожаловаться
+          </button>
+          <button class="btn btn-primary" id="profileBackBtn" type="button">
+            <i class="fa-solid fa-arrow-left"></i> Назад
+          </button>
+        `;
+        document.getElementById('profileMsgBtn').addEventListener('click', async () => {
+          await startChatWith(userToShow.id);
+        });
+        document.getElementById('profileComplaintBtn').addEventListener('click', async () => {
+          if (!requireLogin()) return;
+          const text = prompt('Опишите жалобу (обязательно):');
+          if (!text || !text.trim()) return;
+          try {
+            await apiPost('/api/complaints', { targetUserId: userToShow.id, fromUserId: sessionUser.id, text: text.trim() });
+            alert('Жалоба отправлена. Команда сайта рассмотрит её.');
+          } catch (err) {
+            alert('Не получилось отправить жалобу: ' + err.message);
+          }
+        });
+        document.getElementById('profileBackBtn').addEventListener('click', () => {
+          viewedUserId = null;
+          showPage('home');
+        });
+
+        // форма оценки: фиксируем цель
+        rateTargetIdEl.value = String(userToShow.id);
+        rateTargetEmailEl.value = userToShow.email;
+        rateTargetEmailEl.disabled = true;
+
+        // список завершённых общих дел (для отзывов)
+        const reqSel = document.getElementById('rateRequestId');
+        reqSel.innerHTML = `<option value="">Загрузка…</option>`;
+        try {
+          const deals = await apiGet(`/api/requests/completed-with?userId=${sessionUser.id}&otherId=${userToShow.id}`);
+          if (!deals.length) {
+            reqSel.innerHTML = `<option value="">Нет завершённых общих дел</option>`;
+          } else {
+            reqSel.innerHTML = `<option value="">Выберите дело</option>`;
+            deals.forEach(d => {
+              const opt = document.createElement('option');
+              opt.value = String(d.id);
+              opt.textContent = `#${d.id} — ${d.title} (баллы: ${d.pointsToAdd || ''})`;
+              reqSel.appendChild(opt);
+            });
+          }
+        } catch (e) {
+          reqSel.innerHTML = `<option value="">Ошибка загрузки дел</option>`;
+        }
+      } else {
+        actionsEl.innerHTML = `
+          <button class="btn btn-primary" id="profileMyBackBtn" type="button">
+            <i class="fa-solid fa-house"></i> На главную
+          </button>
+          <button class="btn btn-primary" id="profileSwitchRoleBtn" type="button">
+            <i class="fa-solid fa-repeat"></i> Сменить роль
+          </button>
+        `;
+        document.getElementById('profileMyBackBtn').addEventListener('click', () => {
+          viewedUserId = null;
+          showPage('home');
+        });
+        document.getElementById('profileSwitchRoleBtn').addEventListener('click', async () => {
+          if (!requireLogin()) return;
+          const nextRole = (sessionUser.role === 'volunteer') ? 'seeker' : 'volunteer';
+          try {
+            await apiPost('/api/users/' + sessionUser.id + '/role', { role: nextRole });
+            sessionUser = await apiGet('/api/users/' + sessionUser.id);
+            saveSession(sessionUser);
+            updateHeader();
+            alert('Роль изменена: ' + roleLabelRu(sessionUser.role));
+            renderDashboard();
+            renderHomeDirectory();
+            renderHomeTop();
+            renderProfile();
+          } catch (err) {
+            alert('Не получилось сменить роль: ' + err.message);
+          }
+        });
+
+        // можно оценивать по email (если хочешь)
+        rateTargetIdEl.value = '';
+        rateTargetEmailEl.disabled = false;
+        const reqSel = document.getElementById('rateRequestId');
+        reqSel.innerHTML = `<option value="">Сначала выберите пользователя</option>`;
+
+        // редактирование своей анкеты (город/возраст/о себе)
+        editBlockEl.innerHTML = `
+          <div class="mt-sm" style="background:rgba(15,23,42,0.18);border:1px solid rgba(148,163,184,0.35);padding:12px;border-radius:18px;">
+            <div class="text-sm" style="font-weight:700;margin-bottom:8px;">Редактировать анкету</div>
+            <form id="profileEditForm">
+              <div class="form-group">
+                <label class="form-label">Город</label>
+                <input class="input" id="editCity" placeholder="Например: Москва" value="${userToShow.city ? String(userToShow.city).replace(/\"/g,'&quot;') : ''}">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Возраст</label>
+                <input class="input" id="editAge" type="number" min="0" max="120" placeholder="Например: 22" value="${userToShow.age ? String(userToShow.age) : ''}">
+              </div>
+              <div class="form-group">
+                <label class="form-label">О себе</label>
+                <textarea class="textarea" id="editAbout" placeholder="Коротко о себе...">${userToShow.about ? String(userToShow.about) : ''}</textarea>
+              </div>
+              <button class="btn btn-primary" type="submit" style="width:100%;margin-top:6px;">
+                Сохранить
+              </button>
+            </form>
+          </div>
+        `;
+
+        const form = document.getElementById('profileEditForm');
+        form.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          try {
+            const city = document.getElementById('editCity').value.trim();
+            const age = document.getElementById('editAge').value;
+            const about = document.getElementById('editAbout').value.trim();
+            await apiPost('/api/users/' + sessionUser.id + '/update', {
+              city,
+              age: age === '' ? null : parseInt(age, 10),
+              about
+            });
+            sessionUser = await apiGet('/api/users/' + sessionUser.id);
+            saveSession(sessionUser);
+            updateHeader();
+            await renderProfile();
+            alert('Анкета сохранена.');
+          } catch (err) {
+            alert('Не получилось сохранить: ' + err.message);
+          }
+        });
+      }
+
+      // бейджи (простая логика)
+      badgesEl.innerHTML = '';
+      if ((userToShow.completed || 0) >= 1) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-seedling"></i> Первое доброе дело</span>';
+      if ((userToShow.points || 0) >= 50) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-medal"></i> 50+ баллов</span>';
+      if (userToShow.role === 'admin') badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-shield-halved"></i> Команда сайта</span>';
+
+      // отзывы
+      reviewsEl.innerHTML = '<li class="text-xs text-muted">Загрузка…</li>';
+      try {
+        const rows = await apiGet('/api/reviews/' + userToShow.id);
+        if (!rows.length) {
+          reviewsEl.innerHTML = '<li class="text-xs text-muted">Отзывов пока нет.</li>';
+        } else {
+          reviewsEl.innerHTML = '';
+          rows.forEach(rv => {
+            const li = document.createElement('li');
+            li.className = 'timeline-item';
+            li.innerHTML = `
+              <div class="timeline-dot"></div>
+              <div>
+                <strong>${rv.fromName || 'Аноним'}</strong><br/>
+                <span class="text-sm">${rv.comment}</span>
+              </div>
+              <div class="text-xs text-muted">
+                ${rv.rating}/5<br/>
+                ${rv.createdAt || ''}
+              </div>
+            `;
+            reviewsEl.appendChild(li);
+          });
+        }
+      } catch (e) {
+        reviewsEl.innerHTML = '<li class="text-xs text-muted">Ошибка: ' + e.message + '</li>';
+      }
+    }
+
+    // -------------------------
+    // Админка: верификация
+    // -------------------------
+    async function renderAdmin() {
+      if (!isAdminUser(sessionUser)) {
+        alert('Раздел «Админ-панель» доступен только пользователям с ролью «Команда сайта».');
+        showPage('home');
+        return;
+      }
+
+      const statsText = document.getElementById('adminStatsText');
+      if (statsText) {
+        statsText.textContent = 'Загрузка статистики…';
+        try {
+          const st = await apiGet('/api/admin/stats');
+          statsText.innerHTML =
+            '<strong>Сводка:</strong> пользователей — ' +
+            (st.usersTotal ?? '—') +
+            ' (волонтёры ' +
+            (st.volunteers ?? '—') +
+            ', нуждающиеся ' +
+            (st.seekers ?? '—') +
+            '). Заявки: на проверке ' +
+            (st.requestsPending ?? '—') +
+            ', в работе ' +
+            (st.requestsActive ?? '—') +
+            ', завершено ' +
+            (st.requestsCompleted ?? '—') +
+            '. Жалоб в очереди: ' +
+            (st.complaintsPending ?? '—') +
+            '. Сообщений в чатах: ' +
+            (st.messagesTotal ?? '—') +
+            ', диалогов: ' +
+            (st.chatsTotal ?? '—') +
+            '.';
+        } catch {
+          statsText.textContent = 'Не удалось загрузить статистику.';
+        }
+      }
+
+      const reqTbody = document.querySelector('#adminRequestsTable tbody');
+      const compTbody = document.querySelector('#adminComplaintsTable tbody');
+      const usersLimitedTbody = document.querySelector('#adminUsersLimitedTable tbody');
+      reqTbody.innerHTML = '<tr><td colspan="6">Загрузка…</td></tr>';
+      compTbody.innerHTML = '<tr><td colspan="5">Загрузка…</td></tr>';
+
+      try {
+        const rows = await apiGet('/api/admin/requests/pending');
+        const allUsers = await apiGet('/api/users');
+        const map = {};
+        allUsers.forEach(u => map[u.id] = u);
+
+        if (!rows.length) {
+          reqTbody.innerHTML = '<tr><td colspan="6">Нет заявок на верификацию (pending).</td></tr>';
+        } else {
+          reqTbody.innerHTML = '';
+          rows.forEach(r => {
+            const tr = document.createElement('tr');
+            const creator = map[r.createdBy];
+            const cityU = (r.requestCity || '—').replace(/</g, '&lt;');
+            const urg = urgencyLabelRu(r.urgency);
+            const rec = Number(r.recurring) ? ' · повтор' : '';
+            tr.innerHTML = `
+              <td>
+                <div><strong>${(r.title || '').replace(/</g, '&lt;')}</strong></div>
+                <div class="text-xs text-muted" style="margin-top:4px;">${(r.description || '').replace(/</g, '&lt;').slice(0, 300)}${(r.description && r.description.length > 300) ? '…' : ''}</div>
+                <div class="text-xs text-muted" style="margin-top:2px;">Создано: ${r.createdAt || '—'}</div>
+              </td>
+              <td>${typeLabel(r.type)}</td>
+              <td class="text-xs">${cityU}<br/><span class="text-muted">${urg}${rec}</span></td>
+              <td>
+                ${creator ? creator.email : '—'}
+                ${creator ? `<br><button class="btn btn-outline btn-sm btn-open-user" data-user-id="${creator.id}" type="button" style="margin-top:4px;padding:4px 8px;font-size:11px;">Профиль автора</button>` : ''}
+              </td>
+              <td>${r.status}</td>
+              <td>
+                <button class="text-xs btn btn-primary" data-act="approve" data-id="${r.id}">Одобрить</button>
+                <button class="text-xs btn btn-outline" data-act="reject" data-id="${r.id}">Отклонить</button>
+              </td>
+            `;
+            reqTbody.appendChild(tr);
+          });
+        }
+
+        // жалобы — всегда загружаем отдельно
+        compTbody.innerHTML = '<tr><td colspan="5">Загрузка жалоб…</td></tr>';
+        try {
+          const comps = await apiGet('/api/admin/complaints?status=pending');
+          if (!comps.length) {
+            compTbody.innerHTML = '<tr><td colspan="5">Жалоб пока нет.</td></tr>';
+          } else {
+            compTbody.innerHTML = '';
+            comps.forEach(c => {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `
+                <td>
+                  ${(c.targetEmail || '#' + c.targetUserId) + ''}
+                  <br><button class="btn btn-primary btn-open-user" data-user-id="${c.targetUserId}" type="button" style="margin-top:4px;padding:4px 8px;font-size:11px;">Профиль (на кого)</button>
+                </td>
+                <td>
+                  ${(c.fromEmail || '#' + c.fromUserId) + ''}
+                  <br><button class="btn btn-primary btn-open-user" data-user-id="${c.fromUserId}" type="button" style="margin-top:4px;padding:4px 8px;font-size:11px;">Профиль (от кого)</button>
+                </td>
+                <td style="max-width:200px;">${(c.text || '').replace(/</g, '&lt;').slice(0, 150)}${(c.text && c.text.length > 150) ? '…' : ''}</td>
+                <td>${c.status}</td>
+                <td>
+                  <select class="select admin-punish-type" data-id="${c.id}" style="padding:4px 6px;font-size:11px;margin-bottom:4px;">
+                    <option value="dismiss">Закрыть без наказания</option>
+                    <option value="block_30">Блокировка на 30 дней</option>
+                    <option value="block_perm">Блокировка навсегда</option>
+                    <option value="limit_chat_7">Ограничение чата 7 дней</option>
+                    <option value="limit_requests_7">Ограничение заявок 7 дней</option>
+                    <option value="limit_both_7">Чат и заявки 7 дней</option>
+                    <option value="deduct">Снять баллы (-10)</option>
+                  </select>
+                  <input type="text" class="input admin-punish-comment" data-id="${c.id}" placeholder="Причина (обязательно)" style="padding:4px 6px;font-size:11px;width:100%;max-width:180px;margin-bottom:4px;" />
+                  <button class="btn btn-primary btn-resolve-complaint" data-id="${c.id}" type="button" style="padding:4px 8px;font-size:11px;">Применить</button>
+                </td>
+              `;
+              compTbody.appendChild(tr);
+            });
+          }
+        } catch (ec) {
+          compTbody.innerHTML = '<tr><td colspan="5">Ошибка: ' + (ec && ec.message) + '</td></tr>';
+        }
+
+        // пользователи с блокировками / ограничениями
+        usersLimitedTbody.innerHTML = '<tr><td colspan="4">Загрузка…</td></tr>';
+        try {
+          const users = await apiGet('/api/admin/users/blocked');
+          const tab = document.querySelector('#adminUsersTabs button.active')?.dataset.tab || 'blocked';
+          let rowsUsers = Array.isArray(users) ? users.slice() : [];
+          rowsUsers = rowsUsers.filter(u => {
+            const hasLimits = !!(u.banUntil || u.chatLimitedUntil || u.requestsLimitedUntil || u.status === 'blocked');
+            if (!hasLimits) return false;
+            if (tab === 'blocked') return u.status === 'blocked';
+            if (tab === 'limited') return u.status !== 'blocked' && (u.chatLimitedUntil || u.requestsLimitedUntil);
+            return true; // all
+          });
+          if (!rowsUsers.length) {
+            usersLimitedTbody.innerHTML = '<tr><td colspan="4">Нет пользователей с блокировками или ограничениями.</td></tr>';
+          } else {
+            usersLimitedTbody.innerHTML = '';
+            rowsUsers.forEach(u => {
+              const measures = [];
+              if (u.status === 'blocked') {
+                measures.push('Заблокирован' + (u.banUntil ? ` до ${u.banUntil}` : ' (навсегда)'));
+              }
+              if (u.chatLimitedUntil) measures.push('Ограничен чат до ' + u.chatLimitedUntil);
+              if (u.requestsLimitedUntil) measures.push('Ограничены заявки до ' + u.requestsLimitedUntil);
+              const tr = document.createElement('tr');
+              tr.innerHTML = `
+                <td>
+                  <strong>${(u.name || '').replace(/</g, '&lt;')}</strong><br/>
+                  <span class="text-xs text-muted">${(u.email || '').replace(/</g, '&lt;')}</span>
+                </td>
+                <td>
+                  <div class="text-xs">${measures.join('<br/>') || '—'}</div>
+                </td>
+                <td>${u.points}</td>
+                <td>
+                  <button class="btn btn-outline btn-sm btn-open-user" data-user-id="${u.id}" type="button" style="margin-bottom:4px;">Профиль</button><br/>
+                  <button class="btn btn-primary btn-sm admin-user-unlimit" data-email="${u.email}" type="button" style="margin-bottom:4px;">Снять все меры</button><br/>
+                  <button class="btn btn-outline btn-sm admin-user-reset-points" data-email="${u.email}" type="button">Обнулить баллы</button>
+                </td>
+              `;
+              usersLimitedTbody.appendChild(tr);
+            });
+          }
+        } catch (eUsers) {
+          usersLimitedTbody.innerHTML = '<tr><td colspan="4">Ошибка: ' + (eUsers && eUsers.message) + '</td></tr>';
+        }
+      } catch (e) {
+        reqTbody.innerHTML = '<tr><td colspan="5">Ошибка: ' + e.message + '</td></tr>';
+        compTbody.innerHTML = '<tr><td colspan="5">Ошибка: ' + e.message + '</td></tr>';
+        usersLimitedTbody.innerHTML = '<tr><td colspan="4">Ошибка: ' + e.message + '</td></tr>';
+      }
+    }
+
+    // -------------------------
+    // Обработчики: фильтры дашборда, клики по заявкам, админ-кнопки и т.д.
+    // -------------------------
+    // Вкладки дашборда (active / completed / pending): меняем dashTab и перерисовываем список заявок.
+    document.getElementById('dashboardTabs').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-tab]');
+      if (!btn) return;
+      dashTab = btn.dataset.tab;
+      document.querySelectorAll('#dashboardTabs button[data-tab]').forEach(b => b.classList.toggle('active', b === btn));
+      renderDashboard();
+    });
+
+    // Фильтр по типу помощи (data-filter): значение пишем в dashFilter, подсвечиваем активную кнопку.
+    document.getElementById('dashboardFilters').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-filter]');
+      if (!btn) return;
+      dashFilter = btn.dataset.filter;
+      [...document.getElementById('dashboardFilters').querySelectorAll('button')].forEach(b => b.classList.toggle('active', b === btn));
+      renderDashboard();
+    });
+
+    // Поиск по тексту в карточках: dashSearch обновляется на каждый ввод, список пересобирается.
+    document.getElementById('dashboardSearch').addEventListener('input', e => {
+      dashSearch = e.target.value;
+      renderDashboard();
+    });
+
+    const dashDiffSelect = document.getElementById('dashboardDifficulty');
+    if (dashDiffSelect) {
+      dashDiffSelect.addEventListener('change', e => {
+        dashDifficulty = e.target.value || 'all';
+        renderDashboard();
+      });
+    }
+
+    // Для волонтёра: фильтр по городу с задержкой 320 мс (не дёргать API на каждую букву).
+    const dashCityEl = document.getElementById('dashboardCityFilter');
+    if (dashCityEl) {
+      let cityTimer = null;
+      dashCityEl.addEventListener('input', () => {
+        clearTimeout(cityTimer);
+        cityTimer = setTimeout(() => renderDashboard(), 320);
+      });
+    }
+
+    /*
+     * Делегирование кликов по списку заявок (#dashboardList).
+     * Кнопки создаются в renderDashboard() с классами btn-*; здесь определяем, какая нажата, и вызываем нужный API.
+     * openUserBtn — открыть профиль; tlBtn — раскрыть блок истории; start/accept/finish/cancel — этапы заявки;
+     * complainBtn — жалоба; completeBtn — устаревший путь завершения.
+     */
+    document.getElementById('dashboardList').addEventListener('click', async e => {
+      const openUserBtn = e.target.closest('.btn-open-user');
+      const tlBtn = e.target.closest('.btn-request-timeline');
+      const startBtn = e.target.closest('.btn-start-help');
+      const acceptBtn = e.target.closest('.btn-accept-help');
+      const finishBtn = e.target.closest('.btn-finish');
+      const cancelBtn = e.target.closest('.btn-cancel');
+      const complainBtn = e.target.closest('.btn-complain-user');
+      const completeBtn = e.target.closest('.btn-complete'); // старое (оставил, но не должно быть)
+
+      if (tlBtn) {
+        if (!requireLogin()) return;
+        const id = tlBtn.dataset.id;
+        const box = document.getElementById('reqTimelineBox-' + id);
+        if (!box) return;
+        const opening = box.classList.contains('hidden');
+        if (!opening) {
+          box.classList.add('hidden');
+          return;
+        }
+        box.classList.remove('hidden');
+        box.textContent = 'Загрузка…';
+        try {
+          const data = await apiGet('/api/requests/' + id + '/timeline');
+          const lines = (data.items || []).map(
+            it =>
+              (it.at || '—') +
+              ' — ' +
+              it.label +
+              (it.actorName ? ' (' + it.actorName + ')' : '')
+          );
+          box.innerHTML =
+            lines.length ?
+              '<ul style="margin:0;padding-left:18px;">' +
+              lines.map(l => '<li style="margin:4px 0;">' + l.replace(/</g, '&lt;') + '</li>').join('') +
+              '</ul>' :
+              '<span class="text-muted">Событий пока нет.</span>';
+        } catch (err) {
+          box.textContent = 'Ошибка: ' + err.message;
+        }
+        return;
+      }
+
+      if (openUserBtn) {
+        const id = parseInt(openUserBtn.dataset.userId, 10);
+        if (id) {
+          viewedUserId = id;
+          showPage('profile');
+        }
+        return;
+      }
+
+      // Волонтёр нажал "Начать помогать"
+      if (startBtn) {
+        if (!requireLogin()) return;
+        if (sessionUser.role !== 'volunteer') return alert('Начать помогать может только волонтёр.');
+        const id = startBtn.dataset.id;
+        try {
+          // "difficulty" берём из заявки (если сервер уже вернул), но тут проще: пусть остаётся как есть на сервере
+          // если нужно менять сложность волонтёром — добавим отдельную форму
+          const out = await apiPost('/api/requests/' + id + '/take', { volunteerId: sessionUser.id });
+          chatActiveId = out.chatId;
+          alert('Вы начали помогать. Нуждающийся должен подтвердить помощь. Чат открыт.');
+          showPage('chat');
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+      }
+
+      // Нуждающийся принял помощь
+      if (acceptBtn) {
+        if (!requireLogin()) return;
+        if (sessionUser.role !== 'seeker') return alert('Принять помощь может только нуждающийся.');
+        const id = acceptBtn.dataset.id;
+        try {
+          await apiPost('/api/requests/' + id + '/accept', { seekerId: sessionUser.id });
+          alert('Вы приняли помощь. Теперь можно общаться и после этого завершить дело.');
+          renderDashboard();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+      }
+
+      // Завершение дела: по согласию обоих
+      if (finishBtn) {
+        if (!requireLogin()) return;
+        const id = finishBtn.dataset.id;
+        try {
+          const out = await apiPost('/api/requests/' + id + '/finish', { userId: sessionUser.id });
+          if (out && out.pointsAdded) {
+            // если завершили и начислили — обновим сессию
+            sessionUser = await apiGet('/api/users/' + sessionUser.id);
+            saveSession(sessionUser);
+            updateHeader();
+            alert('Дело завершено! Волонтёру начислено баллов: ' + out.pointsAdded);
+          } else {
+            alert('Ок. Ждём подтверждения второй стороны.');
+          }
+          renderDashboard();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+      }
+
+      // Отмена дела (участник: автор или волонтёр)
+      if (cancelBtn) {
+        if (!requireLogin()) return;
+        const id = cancelBtn.dataset.id;
+        const reason = prompt('Причина отмены (обязательно):');
+        if (!reason || !reason.trim()) return;
+        try {
+          await apiPost('/api/requests/' + id + '/cancel', { userId: sessionUser.id, reason: reason.trim() });
+          alert('Дело отменено.');
+          renderDashboard();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+      }
+
+      if (complainBtn) {
+        if (!requireLogin()) return;
+        const targetUserId = parseInt(complainBtn.dataset.userId, 10);
+        const reqId = complainBtn.dataset.reqId;
+        const text = prompt('Опишите жалобу (обязательно):', reqId ? ('Жалоба по заявке #' + reqId + ': ') : '');
+        if (!text || !text.trim()) return;
+        try {
+          await apiPost('/api/complaints', { targetUserId, fromUserId: sessionUser.id, text: text.trim() });
+          alert('Жалоба отправлена. Команда сайта рассмотрит её.');
+        } catch (err) {
+          alert('Не получилось отправить жалобу: ' + err.message);
+        }
+      }
+
+      // старое поведение (на всякий случай)
+      if (completeBtn) {
+        if (!requireLogin()) return;
+        const id = completeBtn.dataset.id;
+        try {
+          await apiPost('/api/requests/' + id + '/complete', { volunteerId: sessionUser.id });
+          sessionUser = await apiGet('/api/users/' + sessionUser.id);
+          saveSession(sessionUser);
+          updateHeader();
+          alert('Ок. Ждём подтверждения второй стороны.');
+          renderDashboard();
+          renderProfile();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+      }
+    });
+
+    // Колокольчик: переключаем панель, при открытии подгружаем сводку с сервера (stopPropagation — не закрыть сразу кликом по document).
+    document.getElementById('notificationBellBtn').addEventListener('click', e => {
+      e.stopPropagation();
+      const panel = document.getElementById('notificationPanel');
+      notificationPanelOpen = !notificationPanelOpen;
+      panel.classList.toggle('hidden', !notificationPanelOpen);
+      if (notificationPanelOpen) refreshNotifications();
+    });
+
+    // Клик внутри панели не всплывает к document (иначе панель схлопнется).
+    document.getElementById('notificationPanel').addEventListener('click', e => e.stopPropagation());
+
+    // Клик вне колокольчика закрывает панель уведомлений.
+    document.addEventListener('click', () => {
+      if (notificationPanelOpen) {
+        notificationPanelOpen = false;
+        document.getElementById('notificationPanel').classList.add('hidden');
+      }
+    });
+
+    // Раз в 45 с обновляем счётчик уведомлений, если пользователь залогинен.
+    setInterval(() => {
+      if (sessionUser) refreshNotifications();
+    }, 45000);
+
+    // Выгрузка CSV для админа: kind = 'users' | 'requests'; токен в заголовке, файл скачивается через временную ссылку.
+    async function downloadAdminCsv(kind) {
+      const r = await fetch(apiUrl('/api/admin/export?kind=' + encodeURIComponent(kind)), {
+        headers: { Authorization: 'Bearer ' + loadToken() },
+      });
+      if (!r.ok) {
+        let msg = 'Ошибка выгрузки';
+        try {
+          const j = await r.json();
+          if (j && j.error) msg = j.error;
+        } catch {}
+        alert(msg);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = kind === 'users' ? 'voluntis-users.csv' : 'voluntis-requests.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // Кнопки экспорта в админке: проверяем роль, затем качаем нужный kind.
+    const adminExReq = document.getElementById('adminExportRequestsBtn');
+    const adminExUsr = document.getElementById('adminExportUsersBtn');
+    if (adminExReq) {
+      adminExReq.addEventListener('click', () => {
+        if (!sessionUser || sessionUser.role !== 'admin') return alert('Только для команды сайта.');
+        downloadAdminCsv('requests');
+      });
+    }
+    if (adminExUsr) {
+      adminExUsr.addEventListener('click', () => {
+        if (!sessionUser || sessionUser.role !== 'admin') return alert('Только для команды сайта.');
+        downloadAdminCsv('users');
+      });
+    }
+
+    // Форма «новая заявка»: только нуждающийся; поля уходят в POST /api/requests, затем обновляем список.
+    document.getElementById('requestForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!requireLogin()) return;
+      if (sessionUser.role !== 'seeker') return alert('Заявки может создавать только нуждающийся.');
+
+      const title = document.getElementById('reqTitle').value.trim();
+      const type = document.getElementById('reqType').value;
+      const difficulty = parseInt(document.getElementById('reqDifficulty').value, 10) || 3;
+      const desc = document.getElementById('reqDesc').value.trim();
+      const requestCity = document.getElementById('reqCity').value.trim();
+      const urgency = document.getElementById('reqUrgency').value;
+      const neededAtRaw = document.getElementById('reqNeededAt').value;
+      const neededAt = neededAtRaw
+        ? new Date(neededAtRaw).toISOString().slice(0, 19).replace('T', ' ')
+        : '';
+      const recurring = document.getElementById('reqRecurring').checked;
+      const recurringNote = document.getElementById('reqRecurringNote').value.trim();
+
+      if (!title || !desc) return alert('Заполните заголовок и описание.');
+      if (!requestCity) return alert('Укажите город, где нужна помощь.');
+
+      try {
+        await apiPost('/api/requests', {
+          title,
+          type,
+          difficulty,
+          description: desc,
+          createdBy: sessionUser.id,
+          requestCity,
+          urgency,
+          neededAt: neededAt || undefined,
+          recurring,
+          recurringNote: recurring ? recurringNote : undefined,
+        });
+        e.target.reset();
+        if (sessionUser.city) document.getElementById('reqCity').value = sessionUser.city;
+        alert('Заявка отправлена на верификацию (pending).');
+        renderDashboard();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Текст сообщения, если пользователь сначала должен подтвердить модалку безопасности.
+    let chatMessagePending = null;
+
+    // Подтверждение в модалке чата: пишем флаг в sessionStorage и доотправляем отложенное сообщение.
+    document.getElementById('chatSafetyOk').addEventListener('click', async () => {
+      document.getElementById('chatSafetyModal').classList.add('hidden');
+      try {
+        sessionStorage.setItem('voluntis_safety_ok', '1');
+      } catch {}
+      const text = chatMessagePending;
+      chatMessagePending = null;
+      if (!text || !chatActiveId || !sessionUser) return;
+      try {
+        await apiPost('/api/chats/' + chatActiveId + '/messages', { fromUserId: sessionUser.id, text });
+        const input = document.getElementById('chatInput');
+        if (input) input.value = '';
+        renderChat();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Отправка сообщения: без подтверждения безопасности показываем модалку и сохраняем текст в chatMessagePending.
+    document.getElementById('chatForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!requireLogin()) return;
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+      if (!chatActiveId) return alert('Сначала выберите диалог слева.');
+      let safetyOk = false;
+      try {
+        safetyOk = sessionStorage.getItem('voluntis_safety_ok') === '1';
+      } catch {
+        safetyOk = false;
+      }
+      if (!safetyOk) {
+        chatMessagePending = text;
+        document.getElementById('chatSafetyModal').classList.remove('hidden');
+        return;
+      }
+      try {
+        await apiPost('/api/chats/' + chatActiveId + '/messages', { fromUserId: sessionUser.id, text });
+        input.value = '';
+        renderChat();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Отзыв: нужен requestId завершённого дела; targetUserId либо из скрытого поля (чужой профиль), либо ищем по email.
+    document.getElementById('ratingForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!requireLogin()) return;
+
+      const targetIdRaw = document.getElementById('rateTargetUserId').value;
+      const email = document.getElementById('rateTargetEmail').value.trim();
+      const requestIdRaw = document.getElementById('rateRequestId').value;
+      const requestId = requestIdRaw ? parseInt(requestIdRaw, 10) : null;
+      const rating = parseInt(document.getElementById('rateValue').value, 10);
+      const comment = document.getElementById('rateComment').value.trim() || '(без комментария)';
+
+      if (!rating || rating < 1 || rating > 5) return alert('Оценка должна быть от 1 до 5.');
+      if (!requestId) return alert('Выберите завершённое дело, за которое оставляете отзыв.');
+
+      try {
+        let targetUserId = targetIdRaw ? parseInt(targetIdRaw, 10) : null;
+        if (!targetUserId) {
+          if (!email) return alert('Укажите email пользователя.');
+          const list = await apiGet('/api/users?q=' + encodeURIComponent(email));
+          const target = list.find(u => u.email.toLowerCase() === email.toLowerCase());
+          if (!target) return alert('Пользователь не найден.');
+          targetUserId = target.id;
+        }
+
+        await apiPost('/api/reviews', { targetUserId, fromUserId: sessionUser.id, requestId, rating, comment });
+        alert('Отзыв сохранён!');
+        e.target.reset();
+        renderProfile();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Таблица заявок на модерацию: открыть профиль автора или approve/reject по data-act.
+    document.querySelector('#adminRequestsTable tbody').addEventListener('click', async e => {
+      const openUserBtn = e.target.closest('.btn-open-user');
+      if (openUserBtn) {
+        const id = parseInt(openUserBtn.dataset.userId, 10);
+        if (id) { viewedUserId = id; showPage('profile'); }
+        return;
+      }
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      if (!sessionUser || sessionUser.role !== 'admin') return;
+      const id = btn.dataset.id;
+      const act = btn.dataset.act;
+      try {
+        if (act === 'approve') await apiPost('/api/admin/requests/' + id + '/approve', {});
+        if (act === 'reject') await apiPost('/api/admin/requests/' + id + '/reject', {});
+        renderAdmin();
+        renderDashboard();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Жалобы: переход в профиль или применение санкции через select+комментарий+кнопку «Применить».
+    document.querySelector('#adminComplaintsTable tbody').addEventListener('click', async e => {
+      const openUserBtn = e.target.closest('.btn-open-user');
+      if (openUserBtn) {
+        const id = parseInt(openUserBtn.dataset.userId, 10);
+        if (id) { viewedUserId = id; showPage('profile'); }
+        return;
+      }
+      const resolveBtn = e.target.closest('.btn-resolve-complaint');
+      if (resolveBtn && sessionUser && sessionUser.role === 'admin') {
+        const id = resolveBtn.dataset.id;
+        const row = resolveBtn.closest('tr');
+        const selectEl = row ? row.querySelector('.admin-punish-type') : null;
+        const commentEl = row ? row.querySelector('.admin-punish-comment') : null;
+        const action = selectEl ? selectEl.value : 'dismiss';
+        const comment = commentEl ? String(commentEl.value || '').trim() : '';
+        if (action !== 'dismiss' && !comment) {
+          alert('Укажите причину наказания (комментарий).');
+          return;
+        }
+        try {
+          await apiPost('/api/admin/complaints/' + id + '/resolve', { action, comment, pointsDelta: -10 });
+          alert('Решение применено.');
+          renderAdmin();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+        return;
+      }
+    });
+
+    // переключатель вкладок списка ограниченных пользователей
+    document.getElementById('adminUsersTabs').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-tab]');
+      if (!btn) return;
+      document.querySelectorAll('#adminUsersTabs button').forEach(b => b.classList.toggle('active', b === btn));
+      renderAdmin();
+    });
+
+    // действия над пользователями с ограничениями
+    document.querySelector('#adminUsersLimitedTable tbody').addEventListener('click', async e => {
+      const unlimitBtn = e.target.closest('.admin-user-unlimit');
+      const resetBtn = e.target.closest('.admin-user-reset-points');
+      if (!sessionUser || sessionUser.role !== 'admin') return;
+      if (unlimitBtn) {
+        const email = unlimitBtn.dataset.email;
+        if (!email) return;
+        if (!confirm('Снять все блокировки и ограничения у пользователя ' + email + '?')) return;
+        try {
+          await apiPost('/api/admin/users/update', {
+            email,
+            pointsDelta: 0,
+            status: 'active',
+            punishmentType: 'remove_limits',
+          });
+          alert('Все блокировки и ограничения сняты.');
+          renderAdmin();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+        return;
+      }
+      if (resetBtn) {
+        const email = resetBtn.dataset.email;
+        if (!email) return;
+        if (!confirm('Обнулить баллы пользователя ' + email + '?')) return;
+        try {
+          await apiPost('/api/admin/users/update', {
+            email,
+            pointsDelta: 0,
+            status: 'keep',
+            punishmentType: 'none',
+            resetPoints: true,
+          });
+          alert('Баллы обнулены.');
+          renderAdmin();
+        } catch (err) {
+          alert('Не получилось: ' + err.message);
+        }
+      }
+    });
+
+    document.getElementById('adminUserForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!sessionUser || sessionUser.role !== 'admin') return;
+      const email = document.getElementById('adminUserEmail').value.trim();
+      const pointsDelta = parseInt(document.getElementById('adminPointsDelta').value, 10) || 0;
+      const status = document.getElementById('adminStatus').value;
+      try {
+        await apiPost('/api/admin/users/update', { email, pointsDelta, status });
+        alert('Изменения применены.');
+        e.target.reset();
+        renderAdmin();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Поиск пользователя по email в админке
+    document.getElementById('adminUserSearchBtn').addEventListener('click', async () => {
+      if (!sessionUser || sessionUser.role !== 'admin') return;
+      const q = document.getElementById('adminUserSearchEmail').value.trim();
+      const out = document.getElementById('adminUserSearchResult');
+      if (!q) {
+        out.textContent = 'Введите часть email для поиска.';
+        return;
+      }
+      out.textContent = 'Поиск...';
+      try {
+        const users = await apiGet('/api/users?q=' + encodeURIComponent(q));
+        if (!users.length) {
+          out.textContent = 'Ничего не найдено.';
+        } else {
+          const top = users.slice(0, 5);
+          const lines = top.map(u => `${u.email} (${u.name || 'без имени'})`);
+          out.textContent = 'Найдено:\n' + lines.join('\n') + '\n\nСкопируйте email и вставьте выше для изменения.';
+        }
+      } catch (err) {
+        out.textContent = 'Ошибка поиска: ' + err.message;
+      }
+    });
+
+    // auth tabs (переключение вкладок)
+    (function initAuthTabs() {
+      const tabs = document.getElementById('authTabs');
+      const loginForm = document.getElementById('loginForm');
+      const registerForm = document.getElementById('registerForm');
+      const goToRegister = document.getElementById('goToRegister');
+      const goToLogin = document.getElementById('goToLogin');
+
+      tabs.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-tab]');
+        if (!btn) return;
+        [...tabs.querySelectorAll('button')].forEach(b => b.classList.toggle('active', b === btn));
+        if (btn.dataset.tab === 'login') {
+          loginForm.classList.remove('hidden');
+          registerForm.classList.add('hidden');
+        } else {
+          loginForm.classList.add('hidden');
+          registerForm.classList.remove('hidden');
+        }
+      });
+
+      goToRegister.addEventListener('click', e => {
+        e.preventDefault();
+        tabs.querySelector('button[data-tab="register"]').click();
+      });
+
+      goToLogin.addEventListener('click', e => {
+        e.preventDefault();
+        tabs.querySelector('button[data-tab="login"]').click();
+      });
+    })();
+
+    // Вход: POST /api/login → сохраняем токен и объект пользователя, обновляем шапку, переходим на главную.
+    document.getElementById('loginForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      try {
+        const out = await apiPost('/api/login', { email, password });
+        saveToken(out.token);
+        sessionUser = out.user;
+        viewedUserId = null;
+        saveSession(sessionUser);
+        await refreshSessionFromServer();
+        updateHeader();
+        alert('Вход выполнен.');
+        showPage('home');
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Регистрация: POST /api/register → сразу логиним как после входа.
+    document.getElementById('registerForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = document.getElementById('regName').value.trim();
+      const email = document.getElementById('regEmail').value.trim();
+      const password = document.getElementById('regPassword').value;
+      const role = document.getElementById('regRole').value;
+
+      try {
+        const out = await apiPost('/api/register', { name, email, password, role });
+        saveToken(out.token);
+        sessionUser = out.user;
+        viewedUserId = null;
+        saveSession(sessionUser);
+        updateHeader();
+        alert('Регистрация завершена. Вы вошли.');
+        showPage('home');
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    // Навигация SPA: кнопка с data-page вызывает showPage; админку не показываем не-админам; в профиль сбрасываем просмотр чужого id.
+    document.getElementById('mainNav').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-page]');
+      if (!btn) return;
+      const page = btn.dataset.page;
+      if (page === 'admin' && !isAdminUser(sessionUser)) {
+        alert('Раздел «Админ-панель» доступен только админам.');
+        return;
+      }
+      if (page === 'profile') viewedUserId = null;
+      showPage(page);
+    });
+
+    // Кнопки на лендинге с data-open-page: смена роли через API или просто showPage(act).
+    document.body.addEventListener('click', async e => {
+      const btn = e.target.closest('[data-open-page]');
+      if (!btn) return;
+      const act = btn.dataset.openPage;
+
+      if (act === 'be-volunteer') {
+        if (!sessionUser) return showPage('auth');
+        try {
+          await apiPost('/api/users/' + sessionUser.id + '/role', { role: 'volunteer' });
+          sessionUser = await apiGet('/api/users/' + sessionUser.id);
+          saveSession(sessionUser);
+          updateHeader();
+          showPage('dashboard');
+        } catch (err) {
+          alert('Не получилось сменить роль: ' + err.message);
+        }
+        return;
+      }
+      if (act === 'be-seeker') {
+        if (!sessionUser) return showPage('auth');
+        try {
+          await apiPost('/api/users/' + sessionUser.id + '/role', { role: 'seeker' });
+          sessionUser = await apiGet('/api/users/' + sessionUser.id);
+          saveSession(sessionUser);
+          updateHeader();
+          showPage('dashboard');
+        } catch (err) {
+          alert('Не получилось сменить роль: ' + err.message);
+        }
+        return;
+      }
+
+      showPage(act);
+    });
+
+    // Выход: инвалидируем токен на сервере, чистим localStorage и состояние чата, возвращаем на главную.
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      try { await apiPost('/api/logout', {}); } catch {}
+      clearSession();
+      sessionUser = null;
+      viewedUserId = null;
+      chatActiveId = null;
+      chatNewUsersCache = null;
+      chatNewSelectedUserId = null;
+      chatParticipantsCache = {};
+      resetChatNewSelection();
+      const cn = document.getElementById('chatNewUserSearch');
+      if (cn) cn.value = '';
+      renderChatNewSearchResults('');
+      updateHeader();
+      showPage('home');
+    });
+
+    // Глобальный поиск пользователя по email (для всех авторизованных)
+    document.getElementById('globalUserSearchBtn').addEventListener('click', async () => {
+      if (!sessionUser) {
+        alert('Сначала войдите в аккаунт.');
+        showPage('auth');
+        return;
+      }
+      const input = document.getElementById('globalUserSearchInput');
+      const q = (input.value || '').trim();
+      if (!q) {
+        alert('Введите email или его часть.');
+        return;
+      }
+      try {
+        const users = await apiGet('/api/users?q=' + encodeURIComponent(q));
+        if (!users.length) {
+          alert('Пользователь не найден.');
+          return;
+        }
+        if (users.length === 1) {
+          viewedUserId = users[0].id;
+          showPage('profile');
+          return;
+        }
+        const list = users.slice(0, 5).map(u => `${u.email} (${u.name || 'без имени'})`).join('\n');
+        alert('Найдено несколько пользователей:\n' + list + '\n\nУточните email, чтобы открыть конкретный профиль.');
+      } catch (err) {
+        alert('Ошибка поиска: ' + err.message);
+      }
+    });
+
+    const bannedLogoutEl = document.getElementById('bannedLogoutBtn');
+    if (bannedLogoutEl) {
+      bannedLogoutEl.addEventListener('click', async () => {
+        try { await fetch(apiUrl('/api/logout'), { method: 'POST', headers: { 'Authorization': 'Bearer ' + loadToken(), 'Content-Type': 'application/json' }, body: '{}' }); } catch {}
+        clearSession();
+        sessionUser = null;
+        viewedUserId = null;
+        chatActiveId = null;
+        chatNewUsersCache = null;
+        chatNewSelectedUserId = null;
+        chatParticipantsCache = {};
+        resetChatNewSelection();
+        const cn2 = document.getElementById('chatNewUserSearch');
+        if (cn2) cn2.value = '';
+        renderChatNewSearchResults('');
+        updateHeader();
+        showPage('home');
+      });
+    }
+
+    // Блок «новый чат»: клик по кандидату задаёт chatNewSelectedUserId; ввод в поле фильтрует список; кнопка создаёт диалог.
+    (function initChatNewControls() {
+      const ul = document.getElementById('chatNewSearchResults');
+      const inp = document.getElementById('chatNewUserSearch');
+      const createBtn = document.getElementById('chatNewCreateBtn');
+      if (ul) {
+        ul.addEventListener('click', e => {
+          const b = e.target.closest('.chat-new-pick-btn');
+          if (!b) return;
+          chatNewSelectedUserId = parseInt(b.dataset.userId, 10);
+          ul.querySelectorAll('.chat-new-pick-btn').forEach(x => x.classList.toggle('active-pick', x === b));
+          const hint = document.getElementById('chatNewSelectedHint');
+          if (hint) hint.textContent = 'Выбран: ' + b.textContent;
+        });
+      }
+      if (inp) {
+        inp.addEventListener('input', () => renderChatNewSearchResults(inp.value));
+      }
+      if (createBtn) {
+        createBtn.addEventListener('click', async () => {
+          if (!requireLogin()) return;
+          if (!chatNewSelectedUserId) {
+            alert('Выберите пользователя в списке результатов поиска.');
+            return;
+          }
+          await startChatWith(chatNewSelectedUserId);
+        });
+      }
+    })();
+
+    document.getElementById('adminPanelBtn').addEventListener('click', () => {
+      if (!isAdminUser(sessionUser)) {
+        alert('Раздел «Админ-панель» доступен только админам.');
+        return;
+      }
+      showPage('admin');
+    });
+
+    (function initNetlifyApiControls() {
+      const saveBtn = document.getElementById('apiUrlSaveBtn');
+      const testBtn = document.getElementById('apiUrlTestBtn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+          const inp = document.getElementById('apiUrlOverrideInput');
+          let url = (inp && inp.value ? inp.value : '').trim().replace(/\/$/, '');
+          if (!url) {
+            alert('Вставьте URL вашего Web Service с Render (Dashboard → сервис → ссылка вверху).');
+            return;
+          }
+          if (!/^https:\/\//i.test(url)) {
+            alert('Адрес должен начинаться с https://');
+            return;
+          }
+          setStoredApiOverride(url);
+          const meta = document.querySelector('meta[name="voluntis-api"]');
+          if (meta) meta.setAttribute('content', url);
+          await testApiConnection();
+        });
+      }
+      if (testBtn) testBtn.addEventListener('click', () => testApiConnection());
+      updateNetlifyApiSetupUi();
+    })();
+
+    // Старт: сессия из localStorage, затем актуальная роль с сервера (важно для admin).
+    (async function boot() {
+      sessionUser = loadSession();
+      if (sessionUser && !loadToken()) {
+        clearSession();
+        sessionUser = null;
+      }
+      await refreshSessionFromServer();
+      updateHeader();
+      showPage('home');
+    })();
+  </script>
+</body>
+</html>

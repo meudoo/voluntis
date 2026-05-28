@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>VOLUNTIS — как опубликовать</title>
+  <meta http-equiv="refresh" content="0;url=/public/index.html" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 520px; margin: 48px auto; padding: 0 16px; line-height: 1.5; }
+    a { color: #2563eb; }
+    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Неверная публикация на Netlify</h1>
+  <p>Вы загрузили <strong>всю папку «дипломм»</strong>. Так нельзя — запросы к <code>/api</code> получают HTML вместо JSON.</p>
+  <p><strong>Правильно:</strong> загрузите только папку <code>deploy-site</code> (создайте её командой ниже).</p>
+  <pre style="background:#f8fafc;padding:12px;border-radius:8px;">cd дипломм
+$env:BACKEND_URL="https://ВАШ-URL.onrender.com"
+npm run build:netlify</pre>
+  <p>Перетащите на Netlify папку <code>deploy-site</code>, не «дипломм».</p>
+  <p><a href="/public/index.html">Открыть сайт из public/ (временно)</a></p>
+</body>
+</html>
