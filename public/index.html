@@ -1199,6 +1199,7 @@
       <nav class="nav-links" id="mainNav">
         <button data-page="home" class="active">Главная</button>
         <button data-page="dashboard">Заявки</button>
+        <button data-page="events">Мероприятия</button>
         <button data-page="chat">Чат</button>
         <button data-page="profile">Профиль</button>
         <button data-page="rules">Правила</button>
@@ -1785,6 +1786,47 @@
             </form>
           </div>
         </div>
+      </section>
+
+      <!-- EVENTS -->
+      <section id="page-events" class="hidden">
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Мероприятия</h2>
+              <p class="section-subtitle">
+                Публикации команды сайта: текст, фото и видео. Пользователи могут ставить лайки и оставлять комментарии.
+              </p>
+            </div>
+          </div>
+
+          <div id="eventsAdminCreateWrap" class="card mb-sm hidden" style="padding:14px 16px;margin-bottom:14px;">
+            <h3 style="margin:0 0 10px;">Новая публикация (только для команды сайта)</h3>
+            <form id="eventsCreateForm">
+              <div class="form-group">
+                <label class="form-label">Заголовок</label>
+                <input class="input" id="eventTitle" placeholder="Например: Субботник в парке" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Текст публикации</label>
+                <textarea class="textarea" id="eventBody" placeholder="Опишите мероприятие, дату, условия участия..."></textarea>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Ссылка на фото (URL)</label>
+                <input class="input" id="eventImageUrl" placeholder="https://..." />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Ссылка на видео (URL)</label>
+                <input class="input" id="eventVideoUrl" placeholder="https://..." />
+              </div>
+              <button class="btn btn-primary" type="submit">
+                <i class="fa-solid fa-upload"></i> Опубликовать
+              </button>
+            </form>
+          </div>
+
+          <div id="eventsList" class="card-grid"></div>
+        </section>
       </section>
 
       <!-- ПРАВИЛА -->
@@ -2616,7 +2658,7 @@
     // -------------------------
     // Навигация: одна страница без перезагрузки (показываем/прячем блоки #page-*)
     // -------------------------
-    const pages = ['home', 'dashboard', 'chat', 'profile', 'rules', 'auth', 'admin', 'banned'];
+    const pages = ['home', 'dashboard', 'events', 'chat', 'profile', 'rules', 'auth', 'admin', 'banned'];
 
     // Открыта ли сейчас выпадашка уведомлений (чтобы клик по документу её закрыл).
     let notificationPanelOpen = false;
@@ -2683,6 +2725,7 @@
         renderHomeTop();
       }
       if (page === 'dashboard') renderDashboard();
+      if (page === 'events') renderEvents();
       if (page === 'chat') renderChat();
       if (page === 'profile') renderProfile();
       if (page === 'admin') renderAdmin();
@@ -3196,6 +3239,69 @@
     }
 
     // -------------------------
+    // Мероприятия
+    // -------------------------
+    async function renderEvents() {
+      const listEl = document.getElementById('eventsList');
+      const createWrap = document.getElementById('eventsAdminCreateWrap');
+      if (!listEl || !createWrap) return;
+
+      const esc = (s) => String(s || '').replace(/</g, '&lt;');
+      createWrap.classList.toggle('hidden', !isAdminUser(sessionUser));
+      listEl.innerHTML = '<p class="text-muted text-sm">Загрузка публикаций…</p>';
+      try {
+        const items = await apiGet('/api/events');
+        if (!items.length) {
+          listEl.innerHTML = '<p class="text-muted text-sm">Пока нет публикаций.</p>';
+          return;
+        }
+        listEl.innerHTML = '';
+        items.forEach(ev => {
+          const commentsHtml = (ev.comments || [])
+            .map(c => (
+              `<li class="timeline-item" style="padding:8px 0;">` +
+                `<div style="font-weight:600;">${esc(c.userName || ('#' + c.userId))}</div>` +
+                `<div class="text-sm">${esc(c.text)}</div>` +
+                `<div class="text-xs text-muted">${esc(c.createdAt || '')}</div>` +
+              `</li>`
+            ))
+            .join('');
+          const card = document.createElement('article');
+          card.className = 'card';
+          card.innerHTML = `
+            <div class="card-header">
+              <h3 class="card-title">${esc(ev.title || 'Публикация')}</h3>
+              <span class="tag">${esc(ev.createdAt || '')}</span>
+            </div>
+            ${ev.body ? `<p class="card-body">${esc(ev.body).replace(/\n/g, '<br/>')}</p>` : ''}
+            ${ev.imageUrl ? `<img src="${esc(ev.imageUrl)}" alt="Изображение мероприятия" style="width:100%;max-height:320px;object-fit:cover;border-radius:14px;margin:8px 0;" />` : ''}
+            ${ev.videoUrl ? `<video controls preload="metadata" src="${esc(ev.videoUrl)}" style="width:100%;max-height:360px;border-radius:14px;background:#000;margin:8px 0;"></video>` : ''}
+            <div class="card-footer" style="flex-direction:column;align-items:stretch;">
+              <div class="text-xs text-muted" style="margin-bottom:8px;">
+                Автор: ${esc(ev.authorName || 'Команда сайта')} · Лайков: ${Number(ev.likesCount || 0)} · Комментариев: ${(ev.comments || []).length}
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button type="button" class="btn ${ev.likedByMe ? 'btn-primary' : 'btn-outline'} btn-event-like" data-id="${ev.id}">
+                  <i class="fa-regular fa-heart"></i> ${ev.likedByMe ? 'Убрать лайк' : 'Лайк'}
+                </button>
+              </div>
+              <ul class="timeline-list" style="margin-top:8px;">${commentsHtml || '<li class="text-xs text-muted">Комментариев пока нет.</li>'}</ul>
+              <form class="event-comment-form" data-id="${ev.id}" style="margin-top:8px;">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                  <input class="input event-comment-input" type="text" placeholder="Написать комментарий..." style="flex:1;min-width:220px;" />
+                  <button type="submit" class="btn btn-outline">Отправить</button>
+                </div>
+              </form>
+            </div>
+          `;
+          listEl.appendChild(card);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<p class="text-muted text-sm">Ошибка: ' + e.message + '</p>';
+      }
+    }
+
+    // -------------------------
     // Чат
     // -------------------------
     async function startChatWith(otherUserId) {
@@ -3462,7 +3568,7 @@
           <button class="btn btn-primary" id="profileMyBackBtn" type="button">
             <i class="fa-solid fa-house"></i> На главную
           </button>
-          <button class="btn btn-outline" id="profileSendVerifyBtn" type="button">
+          <button class="btn btn-primary" id="profileSendVerifyBtn" type="button">
             <i class="fa-solid fa-file-signature"></i> Отправить анкету
           </button>
           <button class="btn btn-primary" id="profileSwitchRoleBtn" type="button">
@@ -4194,6 +4300,58 @@
         );
         renderDashboard();
         renderProfile();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    document.getElementById('eventsCreateForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!requireLogin()) return;
+      if (!isAdminUser(sessionUser)) return alert('Только команда сайта может публиковать мероприятия.');
+      const title = document.getElementById('eventTitle').value.trim();
+      const body = document.getElementById('eventBody').value.trim();
+      const imageUrl = document.getElementById('eventImageUrl').value.trim();
+      const videoUrl = document.getElementById('eventVideoUrl').value.trim();
+      if (!title && !body && !imageUrl && !videoUrl) {
+        return alert('Заполните хотя бы одно поле публикации.');
+      }
+      try {
+        await apiPost('/api/admin/events', { title, body, imageUrl, videoUrl });
+        e.target.reset();
+        alert('Публикация добавлена.');
+        renderEvents();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    document.getElementById('eventsList').addEventListener('click', async e => {
+      const likeBtn = e.target.closest('.btn-event-like');
+      if (!likeBtn) return;
+      if (!requireLogin()) return;
+      const id = likeBtn.dataset.id;
+      if (!id) return;
+      try {
+        await apiPost('/api/events/' + id + '/like', {});
+        renderEvents();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    document.getElementById('eventsList').addEventListener('submit', async e => {
+      const form = e.target.closest('.event-comment-form');
+      if (!form) return;
+      e.preventDefault();
+      if (!requireLogin()) return;
+      const id = form.dataset.id;
+      const input = form.querySelector('.event-comment-input');
+      const text = input ? input.value.trim() : '';
+      if (!id || !text) return alert('Введите комментарий.');
+      try {
+        await apiPost('/api/events/' + id + '/comments', { text });
+        renderEvents();
       } catch (err) {
         alert('Не получилось: ' + err.message);
       }

@@ -156,6 +156,36 @@ db.serialize(() => {
     )
   `);
 
+  // Мероприятия: публикации команды сайта, лайки и комментарии пользователей.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT,
+      body TEXT,
+      imageUrl TEXT,
+      videoUrl TEXT,
+      createdBy INTEGER NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS event_likes (
+      eventId INTEGER NOT NULL,
+      userId INTEGER NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (eventId, userId)
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS event_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      eventId INTEGER NOT NULL,
+      userId INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
   // Журнал событий по заявкам (таймлайн на фронте строится отсюда).
   db.run(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -1059,6 +1089,148 @@ app.post('/api/admin/users/:id/verification', requireAdmin, (req, res) => {
     if (!this.changes) return fail(res, 404, 'Пользователь не найден');
     audit(req.user.id, approved ? 'verification_approve' : 'verification_reject', 'user', id, { kind });
     ok(res, { ok: true });
+  });
+});
+
+// Мероприятия: список публикаций + лайки/комментарии.
+app.get('/api/events', (req, res) => {
+  db.all(
+    `SELECT e.id, e.title, e.body, e.imageUrl, e.videoUrl, e.createdBy, e.createdAt, u.name AS authorName
+     FROM events e
+     LEFT JOIN users u ON u.id = e.createdBy
+     ORDER BY e.id DESC`,
+    [],
+    (err, eventsRows) => {
+      if (err) return fail(res, 500, 'Ошибка базы данных');
+      const ids = (eventsRows || []).map(r => r.id);
+      if (!ids.length) return ok(res, []);
+      const placeholders = ids.map(() => '?').join(',');
+
+      db.all(
+        `SELECT eventId, COUNT(*) AS likesCount
+         FROM event_likes
+         WHERE eventId IN (${placeholders})
+         GROUP BY eventId`,
+        ids,
+        (eLikes, likesRows) => {
+          if (eLikes) return fail(res, 500, 'Ошибка базы данных');
+          const likesMap = {};
+          (likesRows || []).forEach(r => { likesMap[r.eventId] = Number(r.likesCount || 0); });
+
+          const finishWithComments = (likedIdsSet) => {
+            db.all(
+              `SELECT c.id, c.eventId, c.userId, c.text, c.createdAt, u.name AS userName
+               FROM event_comments c
+               LEFT JOIN users u ON u.id = c.userId
+               WHERE c.eventId IN (${placeholders})
+               ORDER BY c.id ASC`,
+              ids,
+              (eComments, commentRows) => {
+                if (eComments) return fail(res, 500, 'Ошибка базы данных');
+                const commentsMap = {};
+                (commentRows || []).forEach(c => {
+                  if (!commentsMap[c.eventId]) commentsMap[c.eventId] = [];
+                  commentsMap[c.eventId].push(c);
+                });
+                const out = eventsRows.map(ev => ({
+                  ...ev,
+                  likesCount: likesMap[ev.id] || 0,
+                  likedByMe: !!(likedIdsSet && likedIdsSet.has(ev.id)),
+                  comments: commentsMap[ev.id] || [],
+                }));
+                ok(res, out);
+              }
+            );
+          };
+
+          if (!req.user) return finishWithComments(null);
+          db.all(
+            `SELECT eventId FROM event_likes WHERE userId = ? AND eventId IN (${placeholders})`,
+            [req.user.id, ...ids],
+            (eMyLikes, myLikesRows) => {
+              if (eMyLikes) return fail(res, 500, 'Ошибка базы данных');
+              const likedIdsSet = new Set((myLikesRows || []).map(r => r.eventId));
+              finishWithComments(likedIdsSet);
+            }
+          );
+        }
+      );
+    }
+  );
+});
+
+// Мероприятия: публикацию может создавать только команда сайта.
+app.post('/api/admin/events', requireAdmin, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  const body = String(req.body.body || '').trim();
+  const imageUrl = String(req.body.imageUrl || '').trim();
+  const videoUrl = String(req.body.videoUrl || '').trim();
+  if (!title && !body && !imageUrl && !videoUrl) return fail(res, 400, 'Заполните хотя бы одно поле публикации.');
+  db.run(
+    `INSERT INTO events (title, body, imageUrl, videoUrl, createdBy)
+     VALUES (?, ?, ?, ?, ?)`,
+    [title || null, body || null, imageUrl || null, videoUrl || null, req.user.id],
+    function (err) {
+      if (err) return fail(res, 500, 'Ошибка базы данных');
+      audit(req.user.id, 'event_create', 'event', this.lastID, { title });
+      ok(res, { id: this.lastID });
+    }
+  );
+});
+
+// Лайк/дизлайк мероприятия (переключатель).
+app.post('/api/events/:id/like', requireAuth, (req, res) => {
+  const id = toInt(req.params.id);
+  if (!id) return fail(res, 400, 'Некорректный id');
+  db.get(`SELECT id FROM events WHERE id = ?`, [id], (e0, row) => {
+    if (e0) return fail(res, 500, 'Ошибка базы данных');
+    if (!row) return fail(res, 404, 'Публикация не найдена');
+    db.get(
+      `SELECT eventId FROM event_likes WHERE eventId = ? AND userId = ?`,
+      [id, req.user.id],
+      (e1, exists) => {
+        if (e1) return fail(res, 500, 'Ошибка базы данных');
+        if (exists) {
+          db.run(
+            `DELETE FROM event_likes WHERE eventId = ? AND userId = ?`,
+            [id, req.user.id],
+            (e2) => {
+              if (e2) return fail(res, 500, 'Ошибка базы данных');
+              ok(res, { liked: false });
+            }
+          );
+        } else {
+          db.run(
+            `INSERT INTO event_likes (eventId, userId) VALUES (?, ?)`,
+            [id, req.user.id],
+            (e3) => {
+              if (e3) return fail(res, 500, 'Ошибка базы данных');
+              ok(res, { liked: true });
+            }
+          );
+        }
+      }
+    );
+  });
+});
+
+// Комментарий к публикации.
+app.post('/api/events/:id/comments', requireAuth, (req, res) => {
+  const id = toInt(req.params.id);
+  const text = String(req.body.text || '').trim();
+  if (!id) return fail(res, 400, 'Некорректный id');
+  if (!text) return fail(res, 400, 'Комментарий пустой');
+  db.get(`SELECT id FROM events WHERE id = ?`, [id], (e0, row) => {
+    if (e0) return fail(res, 500, 'Ошибка базы данных');
+    if (!row) return fail(res, 404, 'Публикация не найдена');
+    db.run(
+      `INSERT INTO event_comments (eventId, userId, text) VALUES (?, ?, ?)`,
+      [id, req.user.id, text.slice(0, 1200)],
+      function (e1) {
+        if (e1) return fail(res, 500, 'Ошибка базы данных');
+        ok(res, { id: this.lastID });
+      }
+    );
   });
 });
 
