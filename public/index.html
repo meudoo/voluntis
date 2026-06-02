@@ -2532,6 +2532,27 @@
       return 'Не отправлено';
     }
 
+    function verificationBadgesHtml(u, opts) {
+      if (!u) return '';
+      const inline = opts && opts.inline;
+      const parts = [];
+      if (Number(u.seekerVerified || 0)) {
+        parts.push(
+          inline
+            ? '<i class="fa-solid fa-circle-check" title="Подтверждённый нуждающийся" style="color:#27ae60;margin-left:6px;"></i>'
+            : '<span class="badge-chip"><i class="fa-solid fa-circle-check" style="color:#27ae60;"></i> Подтверждённый нуждающийся</span>'
+        );
+      }
+      if (Number(u.volunteerVerified || 0)) {
+        parts.push(
+          inline
+            ? '<i class="fa-solid fa-circle-check" title="Подтверждённый волонтёр" style="color:#3b82f6;margin-left:4px;"></i>'
+            : '<span class="badge-chip"><i class="fa-solid fa-circle-check" style="color:#3b82f6;"></i> Подтверждённый волонтёр</span>'
+        );
+      }
+      return parts.join(inline ? '' : ' ');
+    }
+
     function updateVerifyFormLabels() {
       const kindEl = document.getElementById('verifyFormKind');
       const noteLabel = document.getElementById('verifyFormNoteLabel');
@@ -2561,10 +2582,11 @@
       emailEl.value = sessionUser.email || '';
       if (kindEl.value === 'volunteer') {
         phoneEl.value = sessionUser.volunteerPhone || sessionUser.seekerPhone || '';
+        noteEl.value = sessionUser.volunteerFormNote || '';
       } else {
         phoneEl.value = sessionUser.seekerPhone || sessionUser.volunteerPhone || '';
+        noteEl.value = sessionUser.seekerFormNote || '';
       }
-      noteEl.value = '';
       updateVerifyFormLabels();
       modal.classList.remove('hidden');
     }
@@ -2882,7 +2904,7 @@
           card.className = 'card';
           card.innerHTML = `
             <div class="card-header">
-              <h3 class="card-title">${u.name}</h3>
+              <h3 class="card-title">${u.name}${verificationBadgesHtml(u, { inline: true })}</h3>
               <span class="tag">${roleLabelRu(u.role)}</span>
             </div>
             <p class="card-body">
@@ -2927,7 +2949,7 @@
           const avg = formatAvg(u.ratingSum, u.ratingCount);
           card.innerHTML = `
             <div class="card-header">
-              <h3 class="card-title">#${idx + 1} — ${u.name}</h3>
+              <h3 class="card-title">#${idx + 1} — ${u.name}${verificationBadgesHtml(u, { inline: true })}</h3>
               <span class="tag green"><i class="fa-solid fa-bolt"></i> ${u.points || 0}</span>
             </div>
             <p class="card-body text-sm text-muted">
@@ -3235,8 +3257,8 @@
                 ${r.neededAt ? `Когда удобно: ${String(r.neededAt).replace(/</g, '&lt;')}<br/>` : ''}
                 ${Number(r.recurring) ? `<span class="tag" style="display:inline-block;margin:2px 0;">Повторяющаяся нужда</span>${recNote ? ': ' + recNote : ''}<br/>` : ''}
                 Сложность: ${r.difficulty || 1} (баллы: ${r.pointsToAdd || 5})<br/>
-                Автор: ${creator ? creator.email : '—'}<br/>
-                Волонтёр: ${vol ? vol.name : 'пока нет'}
+                Автор: ${creator ? creator.email + verificationBadgesHtml(creator, { inline: true }) : '—'}<br/>
+                Волонтёр: ${vol ? vol.name + verificationBadgesHtml(vol, { inline: true }) : 'пока нет'}
               </span>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
                 ${actions}
@@ -3392,7 +3414,7 @@
           li.innerHTML = `
             <div class="avatar">${other ? other.name.charAt(0) : '?'}</div>
             <div class="meta">
-              <div><strong>${other ? other.name : 'Пользователь'}</strong></div>
+              <div><strong>${other ? other.name : 'Пользователь'}${other ? verificationBadgesHtml(other, { inline: true }) : ''}</strong></div>
               <div class="text-xs text-muted">${other ? other.email : ''}</div>
             </div>
           `;
@@ -3406,7 +3428,7 @@
         const parts = chatParticipantsCache[chatActiveId] || await apiGet('/api/chats/' + chatActiveId + '/participants');
         chatParticipantsCache[chatActiveId] = parts;
         const other = parts.find(p => p.id !== sessionUser.id) || parts[0];
-        activeNameEl.textContent = other ? other.name : 'Диалог';
+        activeNameEl.innerHTML = other ? (other.name + verificationBadgesHtml(other, { inline: true })) : 'Диалог';
         activeSubEl.textContent = 'Сообщения сохраняются в базе данных.';
 
         let query = (searchInput && searchInput.value) ? searchInput.value.trim() : '';
@@ -3514,7 +3536,10 @@
 
       nameEl.textContent = userToShow.name;
       initialsEl.textContent = userToShow.name.split(' ').map(p => p[0]).join('').toUpperCase();
-      roleEl.textContent = roleLabelRu(userToShow.role) + (userToShow.id === sessionUser.id ? ' (вы)' : '');
+      roleEl.innerHTML =
+        roleLabelRu(userToShow.role) +
+        (userToShow.id === sessionUser.id ? ' (вы)' : '') +
+        verificationBadgesHtml(userToShow, { inline: true });
       pointsEl.textContent = userToShow.points || 0;
       completedEl.textContent = userToShow.completed || 0;
       ratingEl.textContent = formatAvg(userToShow.ratingSum, userToShow.ratingCount);
@@ -3670,15 +3695,19 @@
       }
 
       // бейджи (простая логика)
-      badgesEl.innerHTML = '';
-      if (Number(userToShow.seekerVerified || 0)) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-circle-check" style="color:#27ae60;"></i> Подтверждённый нуждающийся</span>';
-      if (Number(userToShow.volunteerVerified || 0)) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-circle-check" style="color:#3b82f6;"></i> Подтверждённый волонтёр</span>';
+      badgesEl.innerHTML = verificationBadgesHtml(userToShow, { inline: false });
       if ((userToShow.completed || 0) >= 1) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-seedling"></i> Первое доброе дело</span>';
       if ((userToShow.points || 0) >= 50) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-medal"></i> 50+ баллов</span>';
       if (userToShow.role === 'admin') badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-shield-halved"></i> Команда сайта</span>';
       if (userToShow.id === sessionUser.id) {
         badgesEl.innerHTML += `<span class="badge-chip">Анкета нуждающегося: ${verificationStatusRu(userToShow.seekerFormStatus)}</span>`;
         badgesEl.innerHTML += `<span class="badge-chip">Анкета волонтёра: ${verificationStatusRu(userToShow.volunteerFormStatus)}</span>`;
+        if (userToShow.seekerFormStatus === 'pending' && !Number(userToShow.seekerVerified || 0)) {
+          badgesEl.innerHTML += '<span class="badge-chip">Ожидает проверки (нуждающийся)</span>';
+        }
+        if (userToShow.volunteerFormStatus === 'pending' && !Number(userToShow.volunteerVerified || 0)) {
+          badgesEl.innerHTML += '<span class="badge-chip">Ожидает проверки (волонтёр)</span>';
+        }
       }
 
       // отзывы
@@ -3751,7 +3780,7 @@
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>
-            <strong>${esc(u.name)}</strong><br/>
+            <strong>${esc(u.name)}${verificationBadgesHtml(u, { inline: true })}</strong><br/>
             <span class="text-xs text-muted">${esc(u.email)}</span><br/>
             <span class="text-xs text-muted">${esc(u.city || '—')}${u.age ? ', ' + esc(u.age) + ' лет' : ''}</span>
           </td>
@@ -4285,7 +4314,21 @@
       }
     });
 
-    document.getElementById('verifyFormKind').addEventListener('change', updateVerifyFormLabels);
+    document.getElementById('verifyFormKind').addEventListener('change', () => {
+      updateVerifyFormLabels();
+      if (!sessionUser) return;
+      const kindEl = document.getElementById('verifyFormKind');
+      const phoneEl = document.getElementById('verifyFormPhone');
+      const noteEl = document.getElementById('verifyFormNote');
+      if (!kindEl || !phoneEl || !noteEl) return;
+      if (kindEl.value === 'volunteer') {
+        phoneEl.value = sessionUser.volunteerPhone || sessionUser.seekerPhone || '';
+        noteEl.value = sessionUser.volunteerFormNote || '';
+      } else {
+        phoneEl.value = sessionUser.seekerPhone || sessionUser.volunteerPhone || '';
+        noteEl.value = sessionUser.seekerFormNote || '';
+      }
+    });
     document.getElementById('verifyFormCancel').addEventListener('click', closeVerifyFormModal);
     document.getElementById('verifyFormModal').addEventListener('click', e => {
       if (e.target.id === 'verifyFormModal') closeVerifyFormModal();
@@ -4306,8 +4349,14 @@
           ? { volunteerPhone: phone, volunteerFormNote: note, submitVolunteerForm: true }
           : { seekerPhone: phone, seekerFormNote: note, submitSeekerForm: true };
       try {
-        await apiPost('/api/users/' + sessionUser.id + '/update', payload);
-        await refreshSessionFromServer();
+        const out = await apiPost('/api/users/' + sessionUser.id + '/update', payload);
+        if (out && out.user) {
+          sessionUser = out.user;
+          saveSession(sessionUser);
+          updateHeader();
+        } else {
+          await refreshSessionFromServer();
+        }
         closeVerifyFormModal();
         alert(
           kind === 'volunteer'

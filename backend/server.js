@@ -431,7 +431,7 @@ function authMiddleware(req, res, next) {
   const token = m ? m[1] : null;
   if (!token) return next(); // гость — дальше роут сам решит, нужна ли авторизация
   db.get(
-    `SELECT s.userId as userId, u.id, u.name, u.email, u.role, u.points, u.completed, u.ratingSum, u.ratingCount, u.status, u.city, u.age, u.about, u.banUntil, u.banReason, u.chatLimitedUntil, u.requestsLimitedUntil, u.seekerVerified, u.volunteerVerified, u.seekerFormStatus, u.volunteerFormStatus, u.seekerPhone, u.volunteerPhone
+    `SELECT s.userId as userId, u.id, u.name, u.email, u.role, u.points, u.completed, u.ratingSum, u.ratingCount, u.status, u.city, u.age, u.about, u.banUntil, u.banReason, u.chatLimitedUntil, u.requestsLimitedUntil, u.seekerVerified, u.volunteerVerified, u.seekerFormStatus, u.volunteerFormStatus, u.seekerPhone, u.volunteerPhone, u.seekerFormNote, u.volunteerFormNote
      FROM sessions s
      JOIN users u ON u.id = s.userId
      WHERE s.token = ?`,
@@ -763,7 +763,7 @@ app.get('/api/users', (req, res) => {
   const role = req.query.role;
   const q = req.query.q;
 
-  let sql = `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone FROM users WHERE status != 'blocked'`;
+  let sql = `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote FROM users WHERE status != 'blocked'`;
   const params = [];
   const where = [];
 
@@ -806,6 +806,8 @@ app.get('/api/users/me', requireAuth, (req, res) => {
     volunteerFormStatus: u.volunteerFormStatus || 'not_submitted',
     seekerPhone: u.seekerPhone || null,
     volunteerPhone: u.volunteerPhone || null,
+    seekerFormNote: u.seekerFormNote || null,
+    volunteerFormNote: u.volunteerFormNote || null,
     banUntil: u.banUntil || null,
     banReason: u.banReason || null,
   });
@@ -816,7 +818,7 @@ app.get('/api/users/:id', (req, res) => {
   const id = toInt(req.params.id);
   if (!id) return fail(res, 400, 'Некорректный id');
   db.get(
-    `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone FROM users WHERE id = ?`,
+    `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote FROM users WHERE id = ?`,
     [id],
     (err, row) => {
       if (err) return fail(res, 500, 'Ошибка базы данных');
@@ -826,12 +828,40 @@ app.get('/api/users/:id', (req, res) => {
   );
 });
 
+function userPublicRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    points: row.points,
+    completed: row.completed,
+    ratingSum: row.ratingSum,
+    ratingCount: row.ratingCount,
+    status: row.status,
+    city: row.city,
+    age: row.age,
+    about: row.about,
+    seekerVerified: row.seekerVerified || 0,
+    volunteerVerified: row.volunteerVerified || 0,
+    seekerFormStatus: row.seekerFormStatus || 'not_submitted',
+    volunteerFormStatus: row.volunteerFormStatus || 'not_submitted',
+    seekerPhone: row.seekerPhone || null,
+    volunteerPhone: row.volunteerPhone || null,
+    seekerFormNote: row.seekerFormNote || null,
+    volunteerFormNote: row.volunteerFormNote || null,
+  };
+}
+
 // Изменить анкету (без безопасности — это демо)
 app.post('/api/users/:id/update', requireAuth, (req, res) => {
   const id = toInt(req.params.id);
   const { name, password, city, age, about, seekerPhone, seekerFormNote, volunteerPhone, volunteerFormNote, submitSeekerForm, submitVolunteerForm } = req.body;
+  const submitSeeker = !!(submitSeekerForm === true || submitSeekerForm === 'true' || submitSeekerForm === 1 || submitSeekerForm === '1');
+  const submitVolunteer = !!(submitVolunteerForm === true || submitVolunteerForm === 'true' || submitVolunteerForm === 1 || submitVolunteerForm === '1');
   if (!id) return fail(res, 400, 'Некорректный id');
-  if (!name && !password && city === undefined && age === undefined && about === undefined && seekerPhone === undefined && seekerFormNote === undefined && volunteerPhone === undefined && volunteerFormNote === undefined && !submitSeekerForm && !submitVolunteerForm) return fail(res, 400, 'Нечего обновлять');
+  if (!name && !password && city === undefined && age === undefined && about === undefined && seekerPhone === undefined && seekerFormNote === undefined && volunteerPhone === undefined && volunteerFormNote === undefined && !submitSeeker && !submitVolunteer) return fail(res, 400, 'Нечего обновлять');
 
   if (req.user.role !== 'admin' && req.user.id !== id) return fail(res, 403, 'Нельзя менять чужой профиль');
 
@@ -879,11 +909,11 @@ app.post('/api/users/:id/update', requireAuth, (req, res) => {
     fields.push('volunteerFormNote = ?');
     params.push(volunteerFormNote ? String(volunteerFormNote) : null);
   }
-  if (submitSeekerForm) {
+  if (submitSeeker) {
     fields.push(`seekerFormStatus = 'pending'`);
     fields.push(`seekerVerified = 0`);
   }
-  if (submitVolunteerForm) {
+  if (submitVolunteer) {
     fields.push(`volunteerFormStatus = 'pending'`);
     fields.push(`volunteerVerified = 0`);
   }
@@ -895,7 +925,14 @@ app.post('/api/users/:id/update', requireAuth, (req, res) => {
     function (err) {
       if (err) return fail(res, 500, 'Ошибка базы данных');
       audit(req.user.id, 'user_update', 'user', id, { fields: fields.map(f => f.split('=')[0].trim()) });
-      ok(res, { updated: this.changes });
+      db.get(
+        `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote FROM users WHERE id = ?`,
+        [id],
+        (e2, row) => {
+          if (e2 || !row) return ok(res, { updated: this.changes });
+          ok(res, { updated: this.changes, user: userPublicRow(row) });
+        }
+      );
     }
   );
 });
@@ -1671,7 +1708,7 @@ app.get('/api/chats/:id/participants', requireAuth, (req, res) => {
     if (!allowed) return;
 
     db.all(
-      `SELECT u.id, u.name, u.email, u.role, u.points
+      `SELECT u.id, u.name, u.email, u.role, u.points, u.seekerVerified, u.volunteerVerified
        FROM chat_users cu
        JOIN users u ON u.id = cu.userId
        WHERE cu.chatId = ?`,
@@ -2217,7 +2254,7 @@ app.post('/api/admin/users/update', requireAdmin, (req, res) => {
 app.get('/api/top/volunteers', (req, res) => {
   const limit = clamp(toInt(req.query.limit) || 10, 1, 50);
   db.all(
-    `SELECT id, name, email, points, completed, ratingSum, ratingCount, city, age, about
+    `SELECT id, name, email, points, completed, ratingSum, ratingCount, city, age, about, seekerVerified, volunteerVerified
      FROM users
      WHERE role = 'volunteer' AND status != 'blocked'
      ORDER BY points DESC, completed DESC, id ASC
