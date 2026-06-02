@@ -1008,6 +1008,60 @@ app.post('/api/admin/requests/:id/reject', (req, res) => {
   });
 });
 
+// Админ: анкеты верификации (нуждающиеся и волонтёры отдельными списками).
+app.get('/api/admin/verification-forms', requireAdmin, (req, res) => {
+  const status = String(req.query.status || 'pending'); // pending | all | approved | rejected
+  const cols = `id, name, email, role, city, age, seekerVerified, volunteerVerified,
+    seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote`;
+
+  function whereFor(field) {
+    if (status === 'pending') return `${field} = 'pending'`;
+    if (status === 'approved') return `${field} = 'approved'`;
+    if (status === 'rejected') return `${field} = 'rejected'`;
+    return `${field} != 'not_submitted'`;
+  }
+
+  db.all(
+    `SELECT ${cols} FROM users WHERE ${whereFor('seekerFormStatus')} ORDER BY id DESC`,
+    [],
+    (errSeekers, seekers) => {
+      if (errSeekers) return fail(res, 500, 'Ошибка базы данных');
+      db.all(
+        `SELECT ${cols} FROM users WHERE ${whereFor('volunteerFormStatus')} ORDER BY id DESC`,
+        [],
+        (errVolunteers, volunteers) => {
+          if (errVolunteers) return fail(res, 500, 'Ошибка базы данных');
+          ok(res, { seekers: seekers || [], volunteers: volunteers || [] });
+        }
+      );
+    }
+  );
+});
+
+// Админ: одобрить или отклонить анкету (выдать/снять галочку).
+app.post('/api/admin/users/:id/verification', requireAdmin, (req, res) => {
+  const id = toInt(req.params.id);
+  const kind = String(req.body.kind || '');
+  const action = String(req.body.action || '');
+  if (!id) return fail(res, 400, 'Некорректный id');
+  if (kind !== 'seeker' && kind !== 'volunteer') return fail(res, 400, 'Некорректный тип анкеты');
+  if (action !== 'approve' && action !== 'reject') return fail(res, 400, 'Некорректное действие');
+
+  const approved = action === 'approve';
+  const sql =
+    kind === 'seeker'
+      ? `UPDATE users SET seekerVerified = ?, seekerFormStatus = ? WHERE id = ?`
+      : `UPDATE users SET volunteerVerified = ?, volunteerFormStatus = ? WHERE id = ?`;
+  const params = [approved ? 1 : 0, approved ? 'approved' : 'rejected', id];
+
+  db.run(sql, params, function (err) {
+    if (err) return fail(res, 500, 'Ошибка базы данных');
+    if (!this.changes) return fail(res, 404, 'Пользователь не найден');
+    audit(req.user.id, approved ? 'verification_approve' : 'verification_reject', 'user', id, { kind });
+    ok(res, { ok: true });
+  });
+});
+
 // Волонтёр берёт одобренную заявку (лимит активных дел проверяем отдельным запросом).
 app.post('/api/requests/:id/take', (req, res) => {
   const id = toInt(req.params.id);
@@ -1975,6 +2029,8 @@ app.get('/api/admin/stats', requireAdmin, (req, res) => {
        (SELECT COUNT(*) FROM requests WHERE status = 'approved' AND IFNULL(completed,0)=0 AND IFNULL(cancelled,0)=0) AS requestsActive,
        (SELECT COUNT(*) FROM requests WHERE IFNULL(completed,0)=1) AS requestsCompleted,
        (SELECT COUNT(*) FROM complaints WHERE status = 'pending') AS complaintsPending,
+       (SELECT COUNT(*) FROM users WHERE seekerFormStatus = 'pending') AS seekerFormsPending,
+       (SELECT COUNT(*) FROM users WHERE volunteerFormStatus = 'pending') AS volunteerFormsPending,
        (SELECT COUNT(*) FROM messages) AS messagesTotal,
        (SELECT COUNT(*) FROM chats) AS chatsTotal`,
     [],

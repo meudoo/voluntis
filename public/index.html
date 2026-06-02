@@ -1991,7 +1991,45 @@
 
           <div class="layout-two-columns">
             <div>
-              <h3 class="text-sm" style="margin:4px 0;">Новые заявки (требуют верификации)</h3>
+              <h3 class="text-sm" style="margin:4px 0 6px;">Анкеты нуждающихся</h3>
+              <p class="text-xs text-muted" style="margin:0 0 8px;">Зелёная галочка — после одобрения анкеты.</p>
+              <div class="tabs mb-sm" id="adminSeekerFormsTabs" style="margin-bottom:8px;">
+                <button type="button" data-status="pending" class="active">На проверке</button>
+                <button type="button" data-status="all">Все отправленные</button>
+              </div>
+              <table id="adminSeekerFormsTable">
+                <thead>
+                <tr>
+                  <th>Пользователь</th>
+                  <th>Контакты</th>
+                  <th>Текст анкеты</th>
+                  <th>Статус</th>
+                  <th>Действия</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+
+              <h3 class="text-sm" style="margin:18px 0 6px;">Анкеты волонтёров</h3>
+              <p class="text-xs text-muted" style="margin:0 0 8px;">Синяя галочка — после собеседования и одобрения.</p>
+              <div class="tabs mb-sm" id="adminVolunteerFormsTabs" style="margin-bottom:8px;">
+                <button type="button" data-status="pending" class="active">На проверке</button>
+                <button type="button" data-status="all">Все отправленные</button>
+              </div>
+              <table id="adminVolunteerFormsTable">
+                <thead>
+                <tr>
+                  <th>Пользователь</th>
+                  <th>Контакты</th>
+                  <th>Текст анкеты</th>
+                  <th>Статус</th>
+                  <th>Действия</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+
+              <h3 class="text-sm" style="margin:18px 0 4px;">Новые заявки (требуют верификации)</h3>
               <table id="adminRequestsTable">
                 <thead>
                 <tr>
@@ -3554,6 +3592,59 @@
     // -------------------------
     // Админка: верификация
     // -------------------------
+    function fillAdminVerificationTable(tbody, rows, kind) {
+      const esc = (s) => String(s || '').replace(/</g, '&lt;');
+      const phoneKey = kind === 'seeker' ? 'seekerPhone' : 'volunteerPhone';
+      const noteKey = kind === 'seeker' ? 'seekerFormNote' : 'volunteerFormNote';
+      const statusKey = kind === 'seeker' ? 'seekerFormStatus' : 'volunteerFormStatus';
+      const verifiedKey = kind === 'seeker' ? 'seekerVerified' : 'volunteerVerified';
+      const badgeLabel = kind === 'seeker' ? 'зелёную' : 'синюю';
+
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5">Анкет нет.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = '';
+      rows.forEach(u => {
+        const pending = u[statusKey] === 'pending';
+        const statusRu = verificationStatusRu(u[statusKey]);
+        let actions = '';
+        if (pending) {
+          actions = `
+            <button type="button" class="btn btn-primary btn-verify-form" style="padding:4px 8px;font-size:11px;margin-bottom:4px;display:block;width:100%;" data-kind="${kind}" data-act="approve" data-user-id="${u.id}">
+              <i class="fa-solid fa-circle-check"></i> Выдать ${badgeLabel} галочку
+            </button>
+            <button type="button" class="btn btn-outline btn-verify-form" style="padding:4px 8px;font-size:11px;display:block;width:100%;" data-kind="${kind}" data-act="reject" data-user-id="${u.id}">Отклонить</button>
+            <button type="button" class="btn btn-outline btn-open-user" data-user-id="${u.id}" style="padding:4px 8px;font-size:11px;margin-top:4px;">Профиль</button>
+          `;
+        } else if (Number(u[verifiedKey] || 0)) {
+          actions =
+            '<span class="tag green">Галочка выдана</span>' +
+            `<br><button type="button" class="btn btn-outline btn-open-user" data-user-id="${u.id}" style="padding:4px 8px;font-size:11px;margin-top:4px;">Профиль</button>`;
+        } else {
+          actions =
+            '<span class="tag">Отклонено</span>' +
+            `<br><button type="button" class="btn btn-outline btn-open-user" data-user-id="${u.id}" style="padding:4px 8px;font-size:11px;margin-top:4px;">Профиль</button>`;
+        }
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <strong>${esc(u.name)}</strong><br/>
+            <span class="text-xs text-muted">${esc(u.email)}</span><br/>
+            <span class="text-xs text-muted">${esc(u.city || '—')}${u.age ? ', ' + esc(u.age) + ' лет' : ''}</span>
+          </td>
+          <td class="text-xs">
+            <strong>Тел.:</strong> ${esc(u[phoneKey] || '—')}<br/>
+            <strong>Роль:</strong> ${roleLabelRu(u.role)}
+          </td>
+          <td style="max-width:260px;" class="text-xs">${esc(u[noteKey] || '—')}</td>
+          <td class="text-xs">${statusRu}</td>
+          <td>${actions}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
     async function renderAdmin() {
       if (!isAdminUser(sessionUser)) {
         alert('Раздел «Админ-панель» доступен только пользователям с ролью «Команда сайта».');
@@ -3581,6 +3672,10 @@
             (st.requestsCompleted ?? '—') +
             '. Жалоб в очереди: ' +
             (st.complaintsPending ?? '—') +
+            '. Анкеты: нуждающиеся ' +
+            (st.seekerFormsPending ?? '—') +
+            ', волонтёры ' +
+            (st.volunteerFormsPending ?? '—') +
             '. Сообщений в чатах: ' +
             (st.messagesTotal ?? '—') +
             ', диалогов: ' +
@@ -3591,13 +3686,39 @@
         }
       }
 
+      const seekerFormsTbody = document.querySelector('#adminSeekerFormsTable tbody');
+      const volunteerFormsTbody = document.querySelector('#adminVolunteerFormsTable tbody');
       const reqTbody = document.querySelector('#adminRequestsTable tbody');
       const compTbody = document.querySelector('#adminComplaintsTable tbody');
       const usersLimitedTbody = document.querySelector('#adminUsersLimitedTable tbody');
+      const seekerFormsStatus =
+        document.querySelector('#adminSeekerFormsTabs button.active')?.dataset.status || 'pending';
+      const volunteerFormsStatus =
+        document.querySelector('#adminVolunteerFormsTabs button.active')?.dataset.status || 'pending';
+
+      seekerFormsTbody.innerHTML = '<tr><td colspan="5">Загрузка…</td></tr>';
+      volunteerFormsTbody.innerHTML = '<tr><td colspan="5">Загрузка…</td></tr>';
       reqTbody.innerHTML = '<tr><td colspan="6">Загрузка…</td></tr>';
       compTbody.innerHTML = '<tr><td colspan="5">Загрузка…</td></tr>';
 
       try {
+        try {
+          const seekerFormsData = await apiGet(
+            '/api/admin/verification-forms?status=' + encodeURIComponent(seekerFormsStatus)
+          );
+          fillAdminVerificationTable(seekerFormsTbody, seekerFormsData.seekers || [], 'seeker');
+        } catch (es) {
+          seekerFormsTbody.innerHTML = '<tr><td colspan="5">Ошибка: ' + es.message + '</td></tr>';
+        }
+        try {
+          const volunteerFormsData = await apiGet(
+            '/api/admin/verification-forms?status=' + encodeURIComponent(volunteerFormsStatus)
+          );
+          fillAdminVerificationTable(volunteerFormsTbody, volunteerFormsData.volunteers || [], 'volunteer');
+        } catch (ev) {
+          volunteerFormsTbody.innerHTML = '<tr><td colspan="5">Ошибка: ' + ev.message + '</td></tr>';
+        }
+
         const rows = await apiGet('/api/admin/requests/pending');
         const allUsers = await apiGet('/api/users');
         const map = {};
@@ -4160,6 +4281,50 @@
       } catch (err) {
         alert('Не получилось: ' + err.message);
       }
+    });
+
+    async function handleAdminVerificationTableClick(e) {
+      const openUserBtn = e.target.closest('.btn-open-user');
+      if (openUserBtn) {
+        const id = parseInt(openUserBtn.dataset.userId, 10);
+        if (id) {
+          viewedUserId = id;
+          showPage('profile');
+        }
+        return;
+      }
+      const btn = e.target.closest('.btn-verify-form');
+      if (!btn) return;
+      if (!sessionUser || sessionUser.role !== 'admin') return;
+      const userId = btn.dataset.userId;
+      const kind = btn.dataset.kind;
+      const act = btn.dataset.act;
+      const kindRu = kind === 'seeker' ? 'нуждающегося (зелёная)' : 'волонтёра (синяя)';
+      if (!confirm(act === 'approve' ? 'Выдать галочку ' + kindRu + '?' : 'Отклонить эту анкету?')) return;
+      try {
+        await apiPost('/api/admin/users/' + userId + '/verification', { kind, action: act });
+        alert(act === 'approve' ? 'Галочка выдана.' : 'Анкета отклонена.');
+        renderAdmin();
+        renderDashboard();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    }
+
+    document.querySelector('#adminSeekerFormsTable tbody').addEventListener('click', handleAdminVerificationTableClick);
+    document.querySelector('#adminVolunteerFormsTable tbody').addEventListener('click', handleAdminVerificationTableClick);
+
+    document.getElementById('adminSeekerFormsTabs').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-status]');
+      if (!btn) return;
+      document.querySelectorAll('#adminSeekerFormsTabs button').forEach(b => b.classList.toggle('active', b === btn));
+      renderAdmin();
+    });
+    document.getElementById('adminVolunteerFormsTabs').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-status]');
+      if (!btn) return;
+      document.querySelectorAll('#adminVolunteerFormsTabs button').forEach(b => b.classList.toggle('active', b === btn));
+      renderAdmin();
     });
 
     // Таблица заявок на модерацию: открыть профиль автора или approve/reject по data-act.
