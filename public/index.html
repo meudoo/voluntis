@@ -1514,6 +1514,7 @@
               <p class="text-xs">
                 Заполните форму ниже. После проверки командой сайта заявка будет видна волонтёрам.
               </p>
+              <div class="text-xs text-muted" id="seekerVerifyHint" style="margin:8px 0 10px;"></div>
               <form id="requestForm" class="mt-sm">
                 <div class="form-group">
                   <label class="form-label">Заголовок</label>
@@ -1582,6 +1583,42 @@
               <p class="text-xs mt-sm">
                 Примечание: в этом демо верификация происходит в разделе «Команда сайта». Не более 5 активных заявок одновременно.
               </p>
+              <hr style="border:none;border-top:1px solid rgba(148,163,184,0.25);margin:12px 0;">
+              <h3 style="margin-top:0;">Анкета нуждающегося</h3>
+              <p class="text-xs text-muted">После проверки команда сайта выдаёт зелёную галочку.</p>
+              <form id="seekerVerifyForm" class="mt-sm">
+                <div class="form-group">
+                  <label class="form-label">Email для связи</label>
+                  <input class="input" id="seekerVerifyEmail" type="email" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Телефон для связи</label>
+                  <input class="input" id="seekerVerifyPhone" required placeholder="+7..." />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Опишите ситуацию</label>
+                  <textarea class="textarea" id="seekerVerifyNote" required></textarea>
+                </div>
+                <button type="submit" class="btn btn-outline" style="width:100%;">Отправить анкету нуждающегося</button>
+              </form>
+              <hr style="border:none;border-top:1px solid rgba(148,163,184,0.25);margin:12px 0;">
+              <h3 style="margin-top:0;">Собеседование волонтёра</h3>
+              <p class="text-xs text-muted">Без синей галочки волонтёр не может отвечать на заявки.</p>
+              <form id="volunteerVerifyForm" class="mt-sm">
+                <div class="form-group">
+                  <label class="form-label">Email для связи</label>
+                  <input class="input" id="volunteerVerifyEmail" type="email" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Телефон для связи</label>
+                  <input class="input" id="volunteerVerifyPhone" required placeholder="+7..." />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Почему хотите помогать</label>
+                  <textarea class="textarea" id="volunteerVerifyNote" required></textarea>
+                </div>
+                <button type="submit" class="btn btn-outline" style="width:100%;">Отправить анкету волонтёра</button>
+              </form>
             </aside>
           </div>
         </section>
@@ -2033,6 +2070,24 @@
                     <option value="blocked">Заблокирован</option>
                   </select>
                 </div>
+                <div class="form-group">
+                  <label class="form-label">Галочка нуждающегося</label>
+                  <select class="select" id="adminSeekerVerification">
+                    <option value="keep">Не менять</option>
+                    <option value="approved">Одобрить (зелёная)</option>
+                    <option value="pending">Вернуть в ожидание</option>
+                    <option value="rejected">Отклонить</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Галочка волонтёра</label>
+                  <select class="select" id="adminVolunteerVerification">
+                    <option value="keep">Не менять</option>
+                    <option value="approved">Одобрить (синяя)</option>
+                    <option value="pending">Вернуть в ожидание</option>
+                    <option value="rejected">Отклонить</option>
+                  </select>
+                </div>
                 <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px;">
                   Применить изменения
                 </button>
@@ -2371,6 +2426,14 @@
       if (r === 'seeker') return 'Нуждающийся';
       if (r === 'admin') return 'Команда сайта';
       return 'Пользователь';
+    }
+
+    function verificationStatusRu(status) {
+      const s = String(status || '').trim().toLowerCase();
+      if (s === 'approved') return 'Одобрено';
+      if (s === 'pending') return 'На рассмотрении';
+      if (s === 'rejected') return 'Отклонено';
+      return 'Не отправлено';
     }
 
     function isAdminUser(user) {
@@ -2836,13 +2899,21 @@
         requestFormWrap.classList.add('hidden');
       } else if (sessionUser.role === 'volunteer') {
         titleEl.textContent = 'Заявки (одобренные)';
-        subtitleEl.textContent = 'Выберите заявку и нажмите «Начать помогать». Нуждающийся подтвердит — после этого можно завершить дело по согласию обоих.';
+        subtitleEl.textContent = Number(sessionUser.volunteerVerified || 0)
+          ? 'Выберите заявку и нажмите «Начать помогать». Нуждающийся подтвердит — после этого можно завершить дело по согласию обоих.'
+          : 'Для отклика отправьте анкету волонтёра и дождитесь синей галочки от команды сайта.';
         requestFormWrap.classList.add('hidden');
       } else if (sessionUser.role === 'seeker') {
         titleEl.textContent = 'Мои заявки';
         subtitleEl.textContent =
           'Укажите город и сроки — так волонтёрам проще откликнуться. До 5 активных заявок (на проверке или в работе). Завершение только по согласию с волонтёром.';
         requestFormWrap.classList.remove('hidden');
+        const seekHintEl = document.getElementById('seekerVerifyHint');
+        if (seekHintEl) {
+          seekHintEl.textContent = Number(sessionUser.seekerVerified || 0)
+            ? 'У вас есть зелёная галочка нуждающегося.'
+            : 'Можно публиковать заявки без галочки. Для подтверждённого статуса отправьте анкету ниже.';
+        }
         const rc = document.getElementById('reqCity');
         if (rc && sessionUser.city && !rc.value) rc.value = sessionUser.city;
       } else {
@@ -2938,9 +3009,13 @@
           let actions = '';
           // 1) волонтёр начинает помогать (это ещё НЕ завершение и НЕ начисление баллов)
           if (sessionUser && sessionUser.role === 'volunteer' && r.status === 'approved' && !r.assignedVolunteerId && !r.completed) {
-            actions += `<button class="btn btn-primary btn-start-help" data-id="${r.id}">
-              <i class="fa-solid fa-hand-holding-heart"></i> Начать помогать
-            </button>`;
+            if (Number(sessionUser.volunteerVerified || 0)) {
+              actions += `<button class="btn btn-primary btn-start-help" data-id="${r.id}">
+                <i class="fa-solid fa-hand-holding-heart"></i> Начать помогать
+              </button>`;
+            } else {
+              actions += `<div class="text-xs text-muted">Нужна синяя галочка волонтёра для отклика.</div>`;
+            }
           }
 
           // 2) нуждающийся принимает помощь, если волонтёр уже начал
@@ -3394,9 +3469,15 @@
 
       // бейджи (простая логика)
       badgesEl.innerHTML = '';
+      if (Number(userToShow.seekerVerified || 0)) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-circle-check" style="color:#27ae60;"></i> Подтверждённый нуждающийся</span>';
+      if (Number(userToShow.volunteerVerified || 0)) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-circle-check" style="color:#3b82f6;"></i> Подтверждённый волонтёр</span>';
       if ((userToShow.completed || 0) >= 1) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-seedling"></i> Первое доброе дело</span>';
       if ((userToShow.points || 0) >= 50) badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-medal"></i> 50+ баллов</span>';
       if (userToShow.role === 'admin') badgesEl.innerHTML += '<span class="badge-chip"><i class="fa-solid fa-shield-halved"></i> Команда сайта</span>';
+      if (userToShow.id === sessionUser.id) {
+        badgesEl.innerHTML += `<span class="badge-chip">Анкета нуждающегося: ${verificationStatusRu(userToShow.seekerFormStatus)}</span>`;
+        badgesEl.innerHTML += `<span class="badge-chip">Анкета волонтёра: ${verificationStatusRu(userToShow.volunteerFormStatus)}</span>`;
+      }
 
       // отзывы
       reviewsEl.innerHTML = '<li class="text-xs text-muted">Загрузка…</li>';
@@ -3919,6 +4000,52 @@
       }
     });
 
+    document.getElementById('seekerVerifyForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!requireLogin()) return;
+      const email = document.getElementById('seekerVerifyEmail').value.trim();
+      const phone = document.getElementById('seekerVerifyPhone').value.trim();
+      const note = document.getElementById('seekerVerifyNote').value.trim();
+      if (!email || !phone || !note) return alert('Заполните email, телефон и описание ситуации.');
+      if (email.toLowerCase() !== String(sessionUser.email || '').toLowerCase()) return alert('Используйте email своего аккаунта.');
+      try {
+        await apiPost('/api/users/' + sessionUser.id + '/update', {
+          seekerPhone: phone,
+          seekerFormNote: note,
+          submitSeekerForm: true
+        });
+        await refreshSessionFromServer();
+        alert('Анкета нуждающегося отправлена команде сайта.');
+        renderDashboard();
+        renderProfile();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
+    document.getElementById('volunteerVerifyForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!requireLogin()) return;
+      const email = document.getElementById('volunteerVerifyEmail').value.trim();
+      const phone = document.getElementById('volunteerVerifyPhone').value.trim();
+      const note = document.getElementById('volunteerVerifyNote').value.trim();
+      if (!email || !phone || !note) return alert('Заполните email, телефон и мотивацию.');
+      if (email.toLowerCase() !== String(sessionUser.email || '').toLowerCase()) return alert('Используйте email своего аккаунта.');
+      try {
+        await apiPost('/api/users/' + sessionUser.id + '/update', {
+          volunteerPhone: phone,
+          volunteerFormNote: note,
+          submitVolunteerForm: true
+        });
+        await refreshSessionFromServer();
+        alert('Анкета волонтёра отправлена. Дождитесь решения команды сайта.');
+        renderDashboard();
+        renderProfile();
+      } catch (err) {
+        alert('Не получилось: ' + err.message);
+      }
+    });
+
     // Текст сообщения, если пользователь сначала должен подтвердить модалку безопасности.
     let chatMessagePending = null;
 
@@ -4114,8 +4241,10 @@
       const email = document.getElementById('adminUserEmail').value.trim();
       const pointsDelta = parseInt(document.getElementById('adminPointsDelta').value, 10) || 0;
       const status = document.getElementById('adminStatus').value;
+      const seekerVerification = document.getElementById('adminSeekerVerification').value;
+      const volunteerVerification = document.getElementById('adminVolunteerVerification').value;
       try {
-        await apiPost('/api/admin/users/update', { email, pointsDelta, status });
+        await apiPost('/api/admin/users/update', { email, pointsDelta, status, seekerVerification, volunteerVerification });
         alert('Изменения применены.');
         e.target.reset();
         renderAdmin();
@@ -4248,6 +4377,7 @@
           sessionUser = await apiGet('/api/users/' + sessionUser.id);
           saveSession(sessionUser);
           updateHeader();
+          alert('Роль «Волонтёр» включена. Чтобы отвечать на заявки, отправьте анкету волонтёра и получите синюю галочку.');
           showPage('dashboard');
         } catch (err) {
           alert('Не получилось сменить роль: ' + err.message);
@@ -4261,6 +4391,7 @@
           sessionUser = await apiGet('/api/users/' + sessionUser.id);
           saveSession(sessionUser);
           updateHeader();
+          alert('Роль «Нуждающийся» включена. Заявки доступны сразу, для зелёной галочки отправьте анкету нуждающегося.');
           showPage('dashboard');
         } catch (err) {
           alert('Не получилось сменить роль: ' + err.message);
