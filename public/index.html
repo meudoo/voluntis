@@ -1514,7 +1514,6 @@
               <p class="text-xs">
                 Заполните форму ниже. После проверки командой сайта заявка будет видна волонтёрам.
               </p>
-              <div class="text-xs text-muted" id="seekerVerifyHint" style="margin:8px 0 10px;"></div>
               <form id="requestForm" class="mt-sm">
                 <div class="form-group">
                   <label class="form-label">Заголовок</label>
@@ -1582,43 +1581,8 @@
               </form>
               <p class="text-xs mt-sm">
                 Примечание: в этом демо верификация происходит в разделе «Команда сайта». Не более 5 активных заявок одновременно.
+                Анкету для галочки отправляйте в разделе «Профиль».
               </p>
-              <hr style="border:none;border-top:1px solid rgba(148,163,184,0.25);margin:12px 0;">
-              <h3 style="margin-top:0;">Анкета нуждающегося</h3>
-              <p class="text-xs text-muted">После проверки команда сайта выдаёт зелёную галочку.</p>
-              <form id="seekerVerifyForm" class="mt-sm">
-                <div class="form-group">
-                  <label class="form-label">Email для связи</label>
-                  <input class="input" id="seekerVerifyEmail" type="email" required />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Телефон для связи</label>
-                  <input class="input" id="seekerVerifyPhone" required placeholder="+7..." />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Опишите ситуацию</label>
-                  <textarea class="textarea" id="seekerVerifyNote" required></textarea>
-                </div>
-                <button type="submit" class="btn btn-outline" style="width:100%;">Отправить анкету нуждающегося</button>
-              </form>
-              <hr style="border:none;border-top:1px solid rgba(148,163,184,0.25);margin:12px 0;">
-              <h3 style="margin-top:0;">Собеседование волонтёра</h3>
-              <p class="text-xs text-muted">Без синей галочки волонтёр не может отвечать на заявки.</p>
-              <form id="volunteerVerifyForm" class="mt-sm">
-                <div class="form-group">
-                  <label class="form-label">Email для связи</label>
-                  <input class="input" id="volunteerVerifyEmail" type="email" required />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Телефон для связи</label>
-                  <input class="input" id="volunteerVerifyPhone" required placeholder="+7..." />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Почему хотите помогать</label>
-                  <textarea class="textarea" id="volunteerVerifyNote" required></textarea>
-                </div>
-                <button type="submit" class="btn btn-outline" style="width:100%;">Отправить анкету волонтёра</button>
-              </form>
             </aside>
           </div>
         </section>
@@ -1785,6 +1749,42 @@
             </aside>
           </div>
         </section>
+
+        <div id="verifyFormModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="verifyFormModalTitle">
+          <div class="modal-card" style="max-width:520px;width:100%;">
+            <h3 id="verifyFormModalTitle">Анкета для верификации</h3>
+            <p class="text-xs text-muted" style="margin:0 0 12px;">
+              Команда сайта проверит данные и выдаст галочку: зелёную для нуждающегося, синюю для волонтёра.
+            </p>
+            <form id="verifyFormModalForm">
+              <div class="form-group">
+                <label class="form-label">Кто вы?</label>
+                <select class="select" id="verifyFormKind" required>
+                  <option value="seeker">Нуждающийся</option>
+                  <option value="volunteer">Волонтёр</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Email для связи</label>
+                <input class="input" id="verifyFormEmail" type="email" required placeholder="you@example.com" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Телефон для связи</label>
+                <input class="input" id="verifyFormPhone" type="tel" required placeholder="+7 900 000-00-00" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" id="verifyFormNoteLabel">Опишите ситуацию</label>
+                <textarea class="textarea" id="verifyFormNote" required placeholder="Кратко и по существу…"></textarea>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <button type="button" class="btn btn-outline" id="verifyFormCancel" style="flex:1;min-width:120px;">Отмена</button>
+                <button type="submit" class="btn btn-primary" style="flex:1;min-width:120px;">
+                  <i class="fa-solid fa-paper-plane"></i> Отправить анкету
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       </section>
 
       <!-- ПРАВИЛА -->
@@ -2436,6 +2436,48 @@
       return 'Не отправлено';
     }
 
+    function updateVerifyFormLabels() {
+      const kindEl = document.getElementById('verifyFormKind');
+      const noteLabel = document.getElementById('verifyFormNoteLabel');
+      const noteEl = document.getElementById('verifyFormNote');
+      if (!kindEl || !noteLabel || !noteEl) return;
+      const kind = kindEl.value;
+      if (kind === 'volunteer') {
+        noteLabel.textContent = 'Почему хотите помогать как волонтёр';
+        noteEl.placeholder = 'Опыт, мотивация, в каком городе готовы помогать…';
+      } else {
+        noteLabel.textContent = 'Опишите вашу ситуацию';
+        noteEl.placeholder = 'В чём нужна помощь, почему не можете сделать сами…';
+      }
+    }
+
+    function openVerifyFormModal() {
+      if (!requireLogin()) return;
+      const modal = document.getElementById('verifyFormModal');
+      const kindEl = document.getElementById('verifyFormKind');
+      const emailEl = document.getElementById('verifyFormEmail');
+      const phoneEl = document.getElementById('verifyFormPhone');
+      const noteEl = document.getElementById('verifyFormNote');
+      if (!modal || !kindEl || !emailEl || !phoneEl || !noteEl) return;
+
+      const role = String(sessionUser.role || '').toLowerCase();
+      kindEl.value = role === 'volunteer' ? 'volunteer' : 'seeker';
+      emailEl.value = sessionUser.email || '';
+      if (kindEl.value === 'volunteer') {
+        phoneEl.value = sessionUser.volunteerPhone || sessionUser.seekerPhone || '';
+      } else {
+        phoneEl.value = sessionUser.seekerPhone || sessionUser.volunteerPhone || '';
+      }
+      noteEl.value = '';
+      updateVerifyFormLabels();
+      modal.classList.remove('hidden');
+    }
+
+    function closeVerifyFormModal() {
+      const modal = document.getElementById('verifyFormModal');
+      if (modal) modal.classList.add('hidden');
+    }
+
     function isAdminUser(user) {
       return !!(user && String(user.role || '').trim().toLowerCase() === 'admin');
     }
@@ -2908,12 +2950,6 @@
         subtitleEl.textContent =
           'Укажите город и сроки — так волонтёрам проще откликнуться. До 5 активных заявок (на проверке или в работе). Завершение только по согласию с волонтёром.';
         requestFormWrap.classList.remove('hidden');
-        const seekHintEl = document.getElementById('seekerVerifyHint');
-        if (seekHintEl) {
-          seekHintEl.textContent = Number(sessionUser.seekerVerified || 0)
-            ? 'У вас есть зелёная галочка нуждающегося.'
-            : 'Можно публиковать заявки без галочки. Для подтверждённого статуса отправьте анкету ниже.';
-        }
         const rc = document.getElementById('reqCity');
         if (rc && sessionUser.city && !rc.value) rc.value = sessionUser.city;
       } else {
@@ -3388,6 +3424,9 @@
           <button class="btn btn-primary" id="profileMyBackBtn" type="button">
             <i class="fa-solid fa-house"></i> На главную
           </button>
+          <button class="btn btn-outline" id="profileSendVerifyBtn" type="button">
+            <i class="fa-solid fa-file-signature"></i> Отправить анкету
+          </button>
           <button class="btn btn-primary" id="profileSwitchRoleBtn" type="button">
             <i class="fa-solid fa-repeat"></i> Сменить роль
           </button>
@@ -3395,6 +3434,9 @@
         document.getElementById('profileMyBackBtn').addEventListener('click', () => {
           viewedUserId = null;
           showPage('home');
+        });
+        document.getElementById('profileSendVerifyBtn').addEventListener('click', () => {
+          openVerifyFormModal();
         });
         document.getElementById('profileSwitchRoleBtn').addEventListener('click', async () => {
           if (!requireLogin()) return;
@@ -4000,45 +4042,35 @@
       }
     });
 
-    document.getElementById('seekerVerifyForm').addEventListener('submit', async e => {
-      e.preventDefault();
-      if (!requireLogin()) return;
-      const email = document.getElementById('seekerVerifyEmail').value.trim();
-      const phone = document.getElementById('seekerVerifyPhone').value.trim();
-      const note = document.getElementById('seekerVerifyNote').value.trim();
-      if (!email || !phone || !note) return alert('Заполните email, телефон и описание ситуации.');
-      if (email.toLowerCase() !== String(sessionUser.email || '').toLowerCase()) return alert('Используйте email своего аккаунта.');
-      try {
-        await apiPost('/api/users/' + sessionUser.id + '/update', {
-          seekerPhone: phone,
-          seekerFormNote: note,
-          submitSeekerForm: true
-        });
-        await refreshSessionFromServer();
-        alert('Анкета нуждающегося отправлена команде сайта.');
-        renderDashboard();
-        renderProfile();
-      } catch (err) {
-        alert('Не получилось: ' + err.message);
-      }
+    document.getElementById('verifyFormKind').addEventListener('change', updateVerifyFormLabels);
+    document.getElementById('verifyFormCancel').addEventListener('click', closeVerifyFormModal);
+    document.getElementById('verifyFormModal').addEventListener('click', e => {
+      if (e.target.id === 'verifyFormModal') closeVerifyFormModal();
     });
-
-    document.getElementById('volunteerVerifyForm').addEventListener('submit', async e => {
+    document.getElementById('verifyFormModalForm').addEventListener('submit', async e => {
       e.preventDefault();
       if (!requireLogin()) return;
-      const email = document.getElementById('volunteerVerifyEmail').value.trim();
-      const phone = document.getElementById('volunteerVerifyPhone').value.trim();
-      const note = document.getElementById('volunteerVerifyNote').value.trim();
-      if (!email || !phone || !note) return alert('Заполните email, телефон и мотивацию.');
-      if (email.toLowerCase() !== String(sessionUser.email || '').toLowerCase()) return alert('Используйте email своего аккаунта.');
+      const kind = document.getElementById('verifyFormKind').value;
+      const email = document.getElementById('verifyFormEmail').value.trim();
+      const phone = document.getElementById('verifyFormPhone').value.trim();
+      const note = document.getElementById('verifyFormNote').value.trim();
+      if (!email || !phone || !note) return alert('Заполните все поля анкеты.');
+      if (email.toLowerCase() !== String(sessionUser.email || '').toLowerCase()) {
+        return alert('В поле email укажите адрес своего аккаунта.');
+      }
+      const payload =
+        kind === 'volunteer'
+          ? { volunteerPhone: phone, volunteerFormNote: note, submitVolunteerForm: true }
+          : { seekerPhone: phone, seekerFormNote: note, submitSeekerForm: true };
       try {
-        await apiPost('/api/users/' + sessionUser.id + '/update', {
-          volunteerPhone: phone,
-          volunteerFormNote: note,
-          submitVolunteerForm: true
-        });
+        await apiPost('/api/users/' + sessionUser.id + '/update', payload);
         await refreshSessionFromServer();
-        alert('Анкета волонтёра отправлена. Дождитесь решения команды сайта.');
+        closeVerifyFormModal();
+        alert(
+          kind === 'volunteer'
+            ? 'Анкета волонтёра отправлена. Дождитесь синей галочки от команды сайта.'
+            : 'Анкета нуждающегося отправлена. Дождитесь зелёной галочки от команды сайта.'
+        );
         renderDashboard();
         renderProfile();
       } catch (err) {
