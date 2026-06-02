@@ -1818,7 +1818,7 @@
               <div class="form-group">
                 <label class="form-label">Видео с компьютера</label>
                 <input class="input" type="file" id="eventVideoFile" accept="video/mp4,video/webm,video/quicktime" />
-                <p class="text-xs text-muted" style="margin-top:4px;">Форматы: JPG, PNG, GIF, WebP, MP4, WebM, MOV. До 30 МБ на файл.</p>
+                <p class="text-xs text-muted" style="margin-top:4px;">Форматы: JPG, PNG, GIF, WebP, MP4, WebM, MOV. Фото до 6 МБ, видео до 12 МБ — сохраняются в базе и не пропадают после обновления сайта.</p>
               </div>
               <button class="btn btn-primary" type="submit">
                 <i class="fa-solid fa-upload"></i> Опубликовать
@@ -3786,7 +3786,8 @@
           </td>
           <td class="text-xs">
             <strong>Тел.:</strong> ${esc(u[phoneKey] || '—')}<br/>
-            <strong>Роль:</strong> ${roleLabelRu(u.role)}
+            <strong>Тип анкеты:</strong> ${kind === 'seeker' ? 'Нуждающийся' : 'Волонтёр'}<br/>
+            <strong>Роль в аккаунте:</strong> ${roleLabelRu(u.role)}
           </td>
           <td style="max-width:260px;" class="text-xs">${esc(u[noteKey] || '—')}</td>
           <td class="text-xs">${statusRu}</td>
@@ -3894,7 +3895,7 @@
               <td>${typeLabel(r.type)}</td>
               <td class="text-xs">${cityU}<br/><span class="text-muted">${urg}${rec}</span></td>
               <td>
-                ${creator ? creator.email : '—'}
+                ${creator ? creator.email + ' · ' + roleLabelRu(creator.role) : '—'}
                 ${creator ? `<br><button class="btn btn-outline btn-sm btn-open-user" data-user-id="${creator.id}" type="button" style="margin-top:4px;padding:4px 8px;font-size:11px;">Профиль автора</button>` : ''}
               </td>
               <td>${r.status}</td>
@@ -4359,12 +4360,13 @@
         }
         closeVerifyFormModal();
         alert(
-          kind === 'volunteer'
-            ? 'Анкета волонтёра отправлена. Дождитесь синей галочки от команды сайта.'
-            : 'Анкета нуждающегося отправлена. Дождитесь зелёной галочки от команды сайта.'
+          (kind === 'volunteer'
+            ? 'Анкета волонтёра отправлена. Роль в аккаунте обновлена на «Волонтёр». Дождитесь синей галочки от команды сайта.'
+            : 'Анкета нуждающегося отправлена. Роль в аккаунте обновлена на «Нуждающийся». Дождитесь зелёной галочки от команды сайта.')
         );
         renderDashboard();
         renderProfile();
+        renderHomeDirectory();
       } catch (err) {
         alert('Не получилось: ' + err.message);
       }
@@ -4387,9 +4389,14 @@
       if (imageFile) fd.append('image', imageFile);
       if (videoFile) fd.append('video', videoFile);
       try {
-        await apiPostForm('/api/admin/events', fd);
+        const created = await apiPostForm('/api/admin/events', fd);
         e.target.reset();
-        alert('Публикация добавлена.');
+        const savedInline = created && (String(created.imageUrl || '').startsWith('data:') || String(created.videoUrl || '').startsWith('data:'));
+        alert(
+          savedInline
+            ? 'Публикация добавлена и сохранена в базе (медиа не пропадут после деплоя).'
+            : 'Публикация добавлена. Текст сохранён; для очень больших файлов используйте фото до 6 МБ и видео до 12 МБ.'
+        );
         renderEvents();
       } catch (err) {
         alert('Не получилось: ' + err.message);

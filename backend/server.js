@@ -276,6 +276,8 @@ addColumnIfMissing('requests', 'recurringNote', `recurringNote TEXT`);
 
 addColumnIfMissing('messages', 'readAt', `readAt TEXT`); // когда собеседник «увидел» сообщение
 addColumnIfMissing('reviews', 'requestId', `requestId INTEGER`); // к какому делу привязан отзыв
+addColumnIfMissing('events', 'imageData', `imageData TEXT`);
+addColumnIfMissing('events', 'videoData', `videoData TEXT`);
 
 /*
  * ========== СПРАВОЧНИК ПО ДАННЫМ (файл database.sqlite) ==========
@@ -357,6 +359,31 @@ function timelineLabelForAuditAction(action) {
 // Для поля details в audit_logs: если объект циклический — вернётся null, INSERT не падает.
 function jsonStringifySafe(obj) {
   try { return JSON.stringify(obj); } catch { return null; }
+}
+
+const INLINE_EVENT_IMAGE_MAX = 6 * 1024 * 1024;
+const INLINE_EVENT_VIDEO_MAX = 12 * 1024 * 1024;
+
+function fileToDataUrlOrNull(file, maxBytes) {
+  if (!file || !file.path) return null;
+  try {
+    const st = fs.statSync(file.path);
+    if (st.size > maxBytes) return null;
+    const buf = fs.readFileSync(file.path);
+    const mime = file.mimetype || 'application/octet-stream';
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+function eventRowWithMedia(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    imageUrl: row.imageData || row.imageUrl || null,
+    videoUrl: row.videoData || row.videoUrl || null,
+  };
 }
 
 // Пароль + соль (hex) → ключ scrypt → храним как hex-строку (не храним пароль открытым текстом).
@@ -560,6 +587,36 @@ function seedIfEmpty() {
 }
 
 seedIfEmpty();
+
+function seedWelcomeEventIfEmpty() {
+  const welcomeBody =
+    'Здравствуйте!\n\n' +
+    'VOLUNTIS — волонтёрская платформа, где люди, которым нужна помощь, могут оставить заявку, ' +
+    'а волонтёры — откликнуться и поддержать в бытовых и социальных делах.\n\n' +
+    'Сейчас идёт набор волонтёров. Зарегистрируйтесь, выберите роль «Волонтёр», отправьте анкету в профиле ' +
+    'и дождитесь синей галочки от команды сайта.\n\n' +
+    'Как пользоваться сайтом:\n' +
+    '1) Регистрация и вход.\n' +
+    '2) Профиль — анкета для верификации.\n' +
+    '3) Заявки — нуждающийся создаёт заявку, волонтёр с галочкой откликается.\n' +
+    '4) Чат — общение после отклика.\n' +
+    '5) Завершение дела — по согласию обеих сторон.\n\n' +
+    'В этом разделе «Мероприятия» команда сайта будет публиковать новости, акции и отчёты о делах.\n\n' +
+    'С уважением, команда сайта VOLUNTIS.';
+
+  db.get(`SELECT COUNT(*) as cnt FROM events`, [], (err, row) => {
+    if (err || (row && row.cnt > 0)) return;
+    db.get(`SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`, [], (e2, admin) => {
+      const adminId = admin && admin.id ? admin.id : 1;
+      db.run(
+        `INSERT INTO events (title, body, createdBy) VALUES (?, ?, ?)`,
+        ['Добро пожаловать на VOLUNTIS — платформу взаимной помощи', welcomeBody, adminId]
+      );
+    });
+  });
+}
+
+setTimeout(seedWelcomeEventIfEmpty, 2000);
 
 // Учебный стенд: у демо-админа всегда role=admin (мог сброситься при смене роли в профиле).
 function ensureDemoAdminRole() {
@@ -912,10 +969,12 @@ app.post('/api/users/:id/update', requireAuth, (req, res) => {
   if (submitSeeker) {
     fields.push(`seekerFormStatus = 'pending'`);
     fields.push(`seekerVerified = 0`);
+    fields.push(`role = 'seeker'`);
   }
   if (submitVolunteer) {
     fields.push(`volunteerFormStatus = 'pending'`);
     fields.push(`volunteerVerified = 0`);
+    fields.push(`role = 'volunteer'`);
   }
   params.push(id);
 
@@ -1144,9 +1203,13 @@ app.post('/api/admin/users/:id/verification', requireAdmin, (req, res) => {
   const approved = action === 'approve';
   const sql =
     kind === 'seeker'
-      ? `UPDATE users SET seekerVerified = ?, seekerFormStatus = ? WHERE id = ?`
-      : `UPDATE users SET volunteerVerified = ?, volunteerFormStatus = ? WHERE id = ?`;
-  const params = [approved ? 1 : 0, approved ? 'approved' : 'rejected', id];
+      ? (approved
+        ? `UPDATE users SET seekerVerified = 1, seekerFormStatus = 'approved', role = 'seeker' WHERE id = ?`
+        : `UPDATE users SET seekerVerified = 0, seekerFormStatus = 'rejected' WHERE id = ?`)
+      : (approved
+        ? `UPDATE users SET volunteerVerified = 1, volunteerFormStatus = 'approved', role = 'volunteer' WHERE id = ?`
+        : `UPDATE users SET volunteerVerified = 0, volunteerFormStatus = 'rejected' WHERE id = ?`);
+  const params = approved ? [id] : [id];
 
   db.run(sql, params, function (err) {
     if (err) return fail(res, 500, 'Ошибка базы данных');
@@ -1159,7 +1222,7 @@ app.post('/api/admin/users/:id/verification', requireAdmin, (req, res) => {
 // Мероприятия: список публикаций + лайки/комментарии.
 app.get('/api/events', (req, res) => {
   db.all(
-    `SELECT e.id, e.title, e.body, e.imageUrl, e.videoUrl, e.createdBy, e.createdAt, u.name AS authorName
+    `SELECT e.id, e.title, e.body, e.imageUrl, e.videoUrl, e.imageData, e.videoData, e.createdBy, e.createdAt, u.name AS authorName
      FROM events e
      LEFT JOIN users u ON u.id = e.createdBy
      ORDER BY e.id DESC`,
@@ -1196,12 +1259,15 @@ app.get('/api/events', (req, res) => {
                   if (!commentsMap[c.eventId]) commentsMap[c.eventId] = [];
                   commentsMap[c.eventId].push(c);
                 });
-                const out = eventsRows.map(ev => ({
-                  ...ev,
-                  likesCount: likesMap[ev.id] || 0,
-                  likedByMe: !!(likedIdsSet && likedIdsSet.has(ev.id)),
-                  comments: commentsMap[ev.id] || [],
-                }));
+                const out = eventsRows.map(ev => {
+                  const base = eventRowWithMedia(ev);
+                  return {
+                    ...base,
+                    likesCount: likesMap[ev.id] || 0,
+                    likedByMe: !!(likedIdsSet && likedIdsSet.has(ev.id)),
+                    comments: commentsMap[ev.id] || [],
+                  };
+                });
                 ok(res, out);
               }
             );
@@ -1237,19 +1303,30 @@ app.post('/api/admin/events', requireAdmin, (req, res) => {
     const body = String(req.body.body || '').trim();
     const imageFile = req.files && req.files.image ? req.files.image[0] : null;
     const videoFile = req.files && req.files.video ? req.files.video[0] : null;
-    const imageUrl = imageFile ? `/uploads/events/${imageFile.filename}` : null;
-    const videoUrl = videoFile ? `/uploads/events/${videoFile.filename}` : null;
-    if (!title && !body && !imageUrl && !videoUrl) {
+    const imageData = imageFile ? fileToDataUrlOrNull(imageFile, INLINE_EVENT_IMAGE_MAX) : null;
+    const videoData = videoFile ? fileToDataUrlOrNull(videoFile, INLINE_EVENT_VIDEO_MAX) : null;
+    const imageUrl = imageFile && !imageData ? `/uploads/events/${imageFile.filename}` : null;
+    const videoUrl = videoFile && !videoData ? `/uploads/events/${videoFile.filename}` : null;
+    if (!title && !body && !imageUrl && !videoUrl && !imageData && !videoData) {
       return fail(res, 400, 'Заполните заголовок, текст или прикрепите фото/видео.');
     }
     db.run(
-      `INSERT INTO events (title, body, imageUrl, videoUrl, createdBy)
-       VALUES (?, ?, ?, ?, ?)`,
-      [title || null, body || null, imageUrl, videoUrl, req.user.id],
+      `INSERT INTO events (title, body, imageUrl, videoUrl, imageData, videoData, createdBy)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [title || null, body || null, imageUrl, videoUrl, imageData, videoData, req.user.id],
       function (err) {
         if (err) return fail(res, 500, 'Ошибка базы данных');
-        audit(req.user.id, 'event_create', 'event', this.lastID, { title, hasImage: !!imageUrl, hasVideo: !!videoUrl });
-        ok(res, { id: this.lastID, imageUrl, videoUrl });
+        audit(req.user.id, 'event_create', 'event', this.lastID, {
+          title,
+          hasImage: !!(imageUrl || imageData),
+          hasVideo: !!(videoUrl || videoData),
+          storedInline: !!(imageData || videoData),
+        });
+        ok(res, {
+          id: this.lastID,
+          imageUrl: imageData || imageUrl,
+          videoUrl: videoData || videoUrl,
+        });
       }
     );
   });
