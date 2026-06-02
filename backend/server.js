@@ -13,6 +13,8 @@ const path = require('path');
 const cors = require('cors');
 // crypto — scrypt для пароля и randomBytes для соли/токена.
 const crypto = require('crypto');
+const fs = require('fs');
+const multer = require('multer');
 
 const app = express();
 // Экземпляр Express: сюда подключаются middleware и маршруты (app.get, app.post).
@@ -34,6 +36,31 @@ app.use(authMiddleware);
 
 // Отдаём статику из ../public (index.html, стили и т.д.)
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Загруженные фото/видео мероприятий (папка создаётся при старте).
+const eventUploadsDir = path.join(__dirname, '..', 'public', 'uploads', 'events');
+fs.mkdirSync(eventUploadsDir, { recursive: true });
+const EVENT_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+const eventUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, eventUploadsDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(String(file.originalname || '')).toLowerCase();
+      const allowed = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm', '.mov']);
+      const safeExt = allowed.has(ext) ? ext : '';
+      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: EVENT_UPLOAD_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || '');
+    if (mime.startsWith('image/') || mime.startsWith('video/')) return cb(null, true);
+    cb(new Error('Можно загружать только фото или видео.'));
+  },
+}).fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'video', maxCount: 1 },
+]);
 
 // Подключение к файлу базы; verbose() — чуть подробнее логирует ошибки SQLite (для отладки).
 const db = new sqlite3.Database(path.join(__dirname, 'database.sqlite'));
@@ -1159,23 +1186,36 @@ app.get('/api/events', (req, res) => {
   );
 });
 
-// Мероприятия: публикацию может создавать только команда сайта.
+// Мероприятия: публикацию может создавать только команда сайта (текст + файлы с компьютера).
 app.post('/api/admin/events', requireAdmin, (req, res) => {
-  const title = String(req.body.title || '').trim();
-  const body = String(req.body.body || '').trim();
-  const imageUrl = String(req.body.imageUrl || '').trim();
-  const videoUrl = String(req.body.videoUrl || '').trim();
-  if (!title && !body && !imageUrl && !videoUrl) return fail(res, 400, 'Заполните хотя бы одно поле публикации.');
-  db.run(
-    `INSERT INTO events (title, body, imageUrl, videoUrl, createdBy)
-     VALUES (?, ?, ?, ?, ?)`,
-    [title || null, body || null, imageUrl || null, videoUrl || null, req.user.id],
-    function (err) {
-      if (err) return fail(res, 500, 'Ошибка базы данных');
-      audit(req.user.id, 'event_create', 'event', this.lastID, { title });
-      ok(res, { id: this.lastID });
+  eventUpload(req, res, (uploadErr) => {
+    if (uploadErr) {
+      const msg =
+        uploadErr.code === 'LIMIT_FILE_SIZE'
+          ? 'Файл слишком большой (максимум 30 МБ).'
+          : uploadErr.message || 'Ошибка загрузки файла';
+      return fail(res, 400, msg);
     }
-  );
+    const title = String(req.body.title || '').trim();
+    const body = String(req.body.body || '').trim();
+    const imageFile = req.files && req.files.image ? req.files.image[0] : null;
+    const videoFile = req.files && req.files.video ? req.files.video[0] : null;
+    const imageUrl = imageFile ? `/uploads/events/${imageFile.filename}` : null;
+    const videoUrl = videoFile ? `/uploads/events/${videoFile.filename}` : null;
+    if (!title && !body && !imageUrl && !videoUrl) {
+      return fail(res, 400, 'Заполните заголовок, текст или прикрепите фото/видео.');
+    }
+    db.run(
+      `INSERT INTO events (title, body, imageUrl, videoUrl, createdBy)
+       VALUES (?, ?, ?, ?, ?)`,
+      [title || null, body || null, imageUrl, videoUrl, req.user.id],
+      function (err) {
+        if (err) return fail(res, 500, 'Ошибка базы данных');
+        audit(req.user.id, 'event_create', 'event', this.lastID, { title, hasImage: !!imageUrl, hasVideo: !!videoUrl });
+        ok(res, { id: this.lastID, imageUrl, videoUrl });
+      }
+    );
+  });
 });
 
 // Лайк/дизлайк мероприятия (переключатель).

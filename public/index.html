@@ -1795,14 +1795,14 @@
             <div>
               <h2 class="section-title">Мероприятия</h2>
               <p class="section-subtitle">
-                Публикации команды сайта: текст, фото и видео. Пользователи могут ставить лайки и оставлять комментарии.
+                Публикации команды сайта: текст, фото и видео с компьютера. Пользователи могут ставить лайки и оставлять комментарии.
               </p>
             </div>
           </div>
 
           <div id="eventsAdminCreateWrap" class="card mb-sm hidden" style="padding:14px 16px;margin-bottom:14px;">
             <h3 style="margin:0 0 10px;">Новая публикация (только для команды сайта)</h3>
-            <form id="eventsCreateForm">
+            <form id="eventsCreateForm" enctype="multipart/form-data">
               <div class="form-group">
                 <label class="form-label">Заголовок</label>
                 <input class="input" id="eventTitle" placeholder="Например: Субботник в парке" />
@@ -1812,12 +1812,13 @@
                 <textarea class="textarea" id="eventBody" placeholder="Опишите мероприятие, дату, условия участия..."></textarea>
               </div>
               <div class="form-group">
-                <label class="form-label">Ссылка на фото (URL)</label>
-                <input class="input" id="eventImageUrl" placeholder="https://..." />
+                <label class="form-label">Фото с компьютера</label>
+                <input class="input" type="file" id="eventImageFile" accept="image/jpeg,image/png,image/gif,image/webp" />
               </div>
               <div class="form-group">
-                <label class="form-label">Ссылка на видео (URL)</label>
-                <input class="input" id="eventVideoUrl" placeholder="https://..." />
+                <label class="form-label">Видео с компьютера</label>
+                <input class="input" type="file" id="eventVideoFile" accept="video/mp4,video/webm,video/quicktime" />
+                <p class="text-xs text-muted" style="margin-top:4px;">Форматы: JPG, PNG, GIF, WebP, MP4, WebM, MOV. До 30 МБ на файл.</p>
               </div>
               <button class="btn btn-primary" type="submit">
                 <i class="fa-solid fa-upload"></i> Опубликовать
@@ -2455,6 +2456,21 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body || {})
       });
+    }
+
+    async function apiPostForm(url, formData) {
+      return apiRequest(url, {
+        method: 'POST',
+        body: formData
+      });
+    }
+
+    function eventMediaSrc(url) {
+      const u = String(url || '').trim();
+      if (!u) return '';
+      if (/^https?:\/\//i.test(u)) return u;
+      if (u.startsWith('/')) return u;
+      return '/' + u;
     }
 
     // Текст на странице «заблокирован»: срок, причина, кто вынес решение (если API отдало).
@@ -3274,8 +3290,8 @@
               <span class="tag">${esc(ev.createdAt || '')}</span>
             </div>
             ${ev.body ? `<p class="card-body">${esc(ev.body).replace(/\n/g, '<br/>')}</p>` : ''}
-            ${ev.imageUrl ? `<img src="${esc(ev.imageUrl)}" alt="Изображение мероприятия" style="width:100%;max-height:320px;object-fit:cover;border-radius:14px;margin:8px 0;" />` : ''}
-            ${ev.videoUrl ? `<video controls preload="metadata" src="${esc(ev.videoUrl)}" style="width:100%;max-height:360px;border-radius:14px;background:#000;margin:8px 0;"></video>` : ''}
+            ${ev.imageUrl ? `<img src="${esc(eventMediaSrc(ev.imageUrl))}" alt="Изображение мероприятия" style="width:100%;max-height:320px;object-fit:cover;border-radius:14px;margin:8px 0;" />` : ''}
+            ${ev.videoUrl ? `<video controls preload="metadata" src="${esc(eventMediaSrc(ev.videoUrl))}" style="width:100%;max-height:360px;border-radius:14px;background:#000;margin:8px 0;"></video>` : ''}
             <div class="card-footer" style="flex-direction:column;align-items:stretch;">
               <div class="text-xs text-muted" style="margin-bottom:8px;">
                 Автор: ${esc(ev.authorName || 'Команда сайта')} · Лайков: ${Number(ev.likesCount || 0)} · Комментариев: ${(ev.comments || []).length}
@@ -4311,13 +4327,18 @@
       if (!isAdminUser(sessionUser)) return alert('Только команда сайта может публиковать мероприятия.');
       const title = document.getElementById('eventTitle').value.trim();
       const body = document.getElementById('eventBody').value.trim();
-      const imageUrl = document.getElementById('eventImageUrl').value.trim();
-      const videoUrl = document.getElementById('eventVideoUrl').value.trim();
-      if (!title && !body && !imageUrl && !videoUrl) {
-        return alert('Заполните хотя бы одно поле публикации.');
+      const imageFile = document.getElementById('eventImageFile').files[0];
+      const videoFile = document.getElementById('eventVideoFile').files[0];
+      if (!title && !body && !imageFile && !videoFile) {
+        return alert('Заполните заголовок, текст или прикрепите фото/видео.');
       }
+      const fd = new FormData();
+      if (title) fd.append('title', title);
+      if (body) fd.append('body', body);
+      if (imageFile) fd.append('image', imageFile);
+      if (videoFile) fd.append('video', videoFile);
       try {
-        await apiPost('/api/admin/events', { title, body, imageUrl, videoUrl });
+        await apiPostForm('/api/admin/events', fd);
         e.target.reset();
         alert('Публикация добавлена.');
         renderEvents();
