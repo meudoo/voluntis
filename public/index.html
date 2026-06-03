@@ -1795,7 +1795,7 @@
             <div>
               <h2 class="section-title">Мероприятия</h2>
               <p class="section-subtitle">
-                Публикации команды сайта: текст, фото и видео с компьютера. Пользователи могут ставить лайки и оставлять комментарии.
+                Публикации команды сайта: текст, фото и видео с компьютера. Лайки и комментарии сохраняются в базе — нужен вход в аккаунт.
               </p>
             </div>
           </div>
@@ -2251,7 +2251,10 @@
     function saveSession(user) {
       // сериализуем user в localStorage для мгновенного UI при перезагрузке.
       // Сохраняем то, что пришло с API после login/register (имя, роль, баллы…).
-      localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+      try {
+        if (!user) localStorage.removeItem(SESSION_KEY);
+        else localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+      } catch { /* приватный режим */ }
     }
 
     function saveToken(tok) {
@@ -2313,6 +2316,11 @@
       const isLocal = /^(localhost|127\.0\.0\.1)$/i.test(location.hostname);
       if (isLocal) {
         window.VOLUNTIS_API_BASE = '';
+        return;
+      }
+      // Сайт и API на одном Render — всегда бьём в тот же origin (лайки/комментарии не уходят в HTML-страницу).
+      if (/\.onrender\.com$/i.test(location.hostname)) {
+        window.VOLUNTIS_API_BASE = location.origin;
         return;
       }
       const override = getStoredApiOverride();
@@ -2436,10 +2444,29 @@
           'Не задан URL API. На странице входа укажите адрес Render (Web Service → URL) и нажмите «Сохранить URL».'
         );
       }
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      let rawText = '';
+      try {
+        rawText = await res.text();
+      } catch {
+        rawText = '';
+      }
       let data = null;
-      try { data = await res.json(); } catch { data = null; }
+      if (rawText && (ct.includes('json') || rawText.trim().startsWith('{') || rawText.trim().startsWith('['))) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = null;
+        }
+      }
+      const looksLikeHtml = /^\s*</.test(rawText) || ct.includes('text/html');
+      if (res.ok && looksLikeHtml) {
+        throw new Error(
+          'Запрос ушёл не на API, а на страницу сайта (HTML). Укажите URL Render в «Связь с API» на странице входа или открывайте сайт с того же адреса, что и сервер.'
+        );
+      }
       if (!res.ok) {
-        const msg = apiErrorMessage(res, data);
+        const msg = (data && data.error) ? data.error : apiErrorMessage(res, data);
         handleApiBanIfNeeded(res, msg);
         throw new Error(msg);
       }
@@ -2681,6 +2708,13 @@
     function requireLogin() {
       if (!sessionUser) {
         alert('Нужно войти или зарегистрироваться.');
+        showPage('auth');
+        return false;
+      }
+      if (!loadToken()) {
+        alert('Сессия устарела. Войдите снова — без токена лайки и комментарии не сохраняются.');
+        sessionUser = null;
+        saveSession(null);
         showPage('auth');
         return false;
       }
@@ -3315,7 +3349,7 @@
             ${ev.imageUrl ? `<img src="${esc(eventMediaSrc(ev.imageUrl))}" alt="Изображение мероприятия" style="width:100%;max-height:320px;object-fit:cover;border-radius:14px;margin:8px 0;" />` : ''}
             ${ev.videoUrl ? `<video controls preload="metadata" src="${esc(eventMediaSrc(ev.videoUrl))}" style="width:100%;max-height:360px;border-radius:14px;background:#000;margin:8px 0;"></video>` : ''}
             <div class="card-footer" style="flex-direction:column;align-items:stretch;">
-              <div class="text-xs text-muted" style="margin-bottom:8px;">
+              <div class="text-xs text-muted event-meta-stats" style="margin-bottom:8px;">
                 Автор: ${esc(ev.authorName || 'Команда сайта')} · Лайков: ${Number(ev.likesCount || 0)} · Комментариев: ${(ev.comments || []).length}
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -4405,15 +4439,35 @@
 
     document.getElementById('eventsList').addEventListener('click', async e => {
       const likeBtn = e.target.closest('.btn-event-like');
-      if (!likeBtn) return;
+      if (!likeBtn || likeBtn.disabled) return;
+      e.preventDefault();
       if (!requireLogin()) return;
-      const id = likeBtn.dataset.id;
+      const id = Number(likeBtn.dataset.id);
       if (!id) return;
+      likeBtn.disabled = true;
       try {
-        await apiPost('/api/events/' + id + '/like', {});
-        renderEvents();
+        const out = await apiPost('/api/events/' + id + '/like', {});
+        if (out && typeof out.likesCount === 'number') {
+          const card = likeBtn.closest('.card');
+          if (card) {
+            const meta = card.querySelector('.event-meta-stats');
+            if (meta) {
+              const commentsN = (card.querySelectorAll('.timeline-item') || []).length;
+              meta.textContent =
+                meta.textContent.replace(/Лайков:\s*\d+/, 'Лайков: ' + out.likesCount) ||
+                meta.textContent;
+            }
+            likeBtn.classList.toggle('btn-primary', !!out.likedByMe);
+            likeBtn.classList.toggle('btn-outline', !out.likedByMe);
+            likeBtn.innerHTML =
+              '<i class="fa-regular fa-heart"></i> ' + (out.likedByMe ? 'Убрать лайк' : 'Лайк');
+          }
+        }
+        await renderEvents();
       } catch (err) {
-        alert('Не получилось: ' + err.message);
+        alert('Не получилось сохранить лайк: ' + err.message);
+      } finally {
+        likeBtn.disabled = false;
       }
     });
 
@@ -4422,15 +4476,20 @@
       if (!form) return;
       e.preventDefault();
       if (!requireLogin()) return;
-      const id = form.dataset.id;
+      const id = Number(form.dataset.id);
       const input = form.querySelector('.event-comment-input');
+      const submitBtn = form.querySelector('button[type="submit"]');
       const text = input ? input.value.trim() : '';
       if (!id || !text) return alert('Введите комментарий.');
+      if (submitBtn) submitBtn.disabled = true;
       try {
         await apiPost('/api/events/' + id + '/comments', { text });
-        renderEvents();
+        if (input) input.value = '';
+        await renderEvents();
       } catch (err) {
-        alert('Не получилось: ' + err.message);
+        alert('Не получилось сохранить комментарий: ' + err.message);
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
       }
     });
 

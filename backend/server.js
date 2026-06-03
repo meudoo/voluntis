@@ -62,8 +62,13 @@ const eventUpload = multer({
   { name: 'video', maxCount: 1 },
 ]);
 
-// Подключение к файлу базы; verbose() — чуть подробнее логирует ошибки SQLite (для отладки).
-const db = new sqlite3.Database(path.join(__dirname, 'database.sqlite'));
+// Путь к SQLite: на Render с Persistent Disk укажите DATABASE_PATH=/var/data/database.sqlite
+const dbPath = process.env.DATABASE_PATH
+  ? path.resolve(process.env.DATABASE_PATH)
+  : path.join(__dirname, 'database.sqlite');
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+const db = new sqlite3.Database(dbPath);
+db.configure('busyTimeout', 5000);
 
 // ----------------------------
 // Мини-миграции (чтобы не удалять базу руками)
@@ -313,6 +318,19 @@ function toInt(x) {
   return Number.isFinite(n) ? n : null;
 }
 
+function eventIdNum(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function currentUserId(req) {
+  const u = req && req.user;
+  if (!u) return null;
+  const id = u.id != null ? u.id : u.userId;
+  const n = toInt(id);
+  return n || null;
+}
+
 // Ограничиваем число отрезком [min, max] (сложность, рейтинг и т.д.).
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -458,7 +476,7 @@ function authMiddleware(req, res, next) {
   const token = m ? m[1] : null;
   if (!token) return next(); // гость — дальше роут сам решит, нужна ли авторизация
   db.get(
-    `SELECT s.userId as userId, u.id, u.name, u.email, u.role, u.points, u.completed, u.ratingSum, u.ratingCount, u.status, u.city, u.age, u.about, u.banUntil, u.banReason, u.chatLimitedUntil, u.requestsLimitedUntil, u.seekerVerified, u.volunteerVerified, u.seekerFormStatus, u.volunteerFormStatus, u.seekerPhone, u.volunteerPhone, u.seekerFormNote, u.volunteerFormNote
+    `SELECT s.userId as sessionUserId, u.id, u.name, u.email, u.role, u.points, u.completed, u.ratingSum, u.ratingCount, u.status, u.city, u.age, u.about, u.banUntil, u.banReason, u.chatLimitedUntil, u.requestsLimitedUntil, u.seekerVerified, u.volunteerVerified, u.seekerFormStatus, u.volunteerFormStatus, u.seekerPhone, u.volunteerPhone, u.seekerFormNote, u.volunteerFormNote
      FROM sessions s
      JOIN users u ON u.id = s.userId
      WHERE s.token = ?`,
@@ -1242,7 +1260,9 @@ app.get('/api/events', (req, res) => {
         (eLikes, likesRows) => {
           if (eLikes) return fail(res, 500, 'Ошибка базы данных');
           const likesMap = {};
-          (likesRows || []).forEach(r => { likesMap[r.eventId] = Number(r.likesCount || 0); });
+          (likesRows || []).forEach(r => {
+            likesMap[eventIdNum(r.eventId)] = Number(r.likesCount || 0);
+          });
 
           const finishWithComments = (likedIdsSet) => {
             db.all(
@@ -1256,16 +1276,19 @@ app.get('/api/events', (req, res) => {
                 if (eComments) return fail(res, 500, 'Ошибка базы данных');
                 const commentsMap = {};
                 (commentRows || []).forEach(c => {
-                  if (!commentsMap[c.eventId]) commentsMap[c.eventId] = [];
-                  commentsMap[c.eventId].push(c);
+                  const eid = eventIdNum(c.eventId);
+                  if (!commentsMap[eid]) commentsMap[eid] = [];
+                  commentsMap[eid].push(c);
                 });
                 const out = eventsRows.map(ev => {
                   const base = eventRowWithMedia(ev);
+                  const eid = eventIdNum(ev.id);
                   return {
                     ...base,
-                    likesCount: likesMap[ev.id] || 0,
-                    likedByMe: !!(likedIdsSet && likedIdsSet.has(ev.id)),
-                    comments: commentsMap[ev.id] || [],
+                    id: eid,
+                    likesCount: likesMap[eid] || 0,
+                    likedByMe: !!(likedIdsSet && likedIdsSet.has(eid)),
+                    comments: commentsMap[eid] || [],
                   };
                 });
                 ok(res, out);
@@ -1273,13 +1296,14 @@ app.get('/api/events', (req, res) => {
             );
           };
 
-          if (!req.user) return finishWithComments(null);
+          const uid = currentUserId(req);
+          if (!uid) return finishWithComments(null);
           db.all(
             `SELECT eventId FROM event_likes WHERE userId = ? AND eventId IN (${placeholders})`,
-            [req.user.id, ...ids],
+            [uid, ...ids],
             (eMyLikes, myLikesRows) => {
               if (eMyLikes) return fail(res, 500, 'Ошибка базы данных');
-              const likedIdsSet = new Set((myLikesRows || []).map(r => r.eventId));
+              const likedIdsSet = new Set((myLikesRows || []).map(r => eventIdNum(r.eventId)));
               finishWithComments(likedIdsSet);
             }
           );
@@ -1332,36 +1356,51 @@ app.post('/api/admin/events', requireAdmin, (req, res) => {
   });
 });
 
+function eventLikeStats(eventId, userId, cb) {
+  db.get(
+    `SELECT COUNT(*) AS likesCount FROM event_likes WHERE eventId = ?`,
+    [eventId],
+    (eCnt, cntRow) => {
+      if (eCnt) return cb(eCnt);
+      const likesCount = cntRow ? Number(cntRow.likesCount || 0) : 0;
+      if (!userId) return cb(null, { likesCount, likedByMe: false });
+      db.get(
+        `SELECT 1 AS ok FROM event_likes WHERE eventId = ? AND userId = ?`,
+        [eventId, userId],
+        (eMe, meRow) => {
+          if (eMe) return cb(eMe);
+          cb(null, { likesCount, likedByMe: !!meRow });
+        }
+      );
+    }
+  );
+}
+
 // Лайк/дизлайк мероприятия (переключатель).
 app.post('/api/events/:id/like', requireAuth, (req, res) => {
   const id = toInt(req.params.id);
+  const uid = currentUserId(req);
   if (!id) return fail(res, 400, 'Некорректный id');
+  if (!uid) return fail(res, 401, 'Нужно войти.');
   db.get(`SELECT id FROM events WHERE id = ?`, [id], (e0, row) => {
     if (e0) return fail(res, 500, 'Ошибка базы данных');
     if (!row) return fail(res, 404, 'Публикация не найдена');
     db.get(
       `SELECT eventId FROM event_likes WHERE eventId = ? AND userId = ?`,
-      [id, req.user.id],
+      [id, uid],
       (e1, exists) => {
         if (e1) return fail(res, 500, 'Ошибка базы данных');
+        const afterToggle = (liked, err) => {
+          if (err) return fail(res, 500, 'Ошибка базы данных');
+          eventLikeStats(id, uid, (eStats, stats) => {
+            if (eStats) return fail(res, 500, 'Ошибка базы данных');
+            ok(res, { liked, eventId: id, likesCount: stats.likesCount, likedByMe: stats.likedByMe });
+          });
+        };
         if (exists) {
-          db.run(
-            `DELETE FROM event_likes WHERE eventId = ? AND userId = ?`,
-            [id, req.user.id],
-            (e2) => {
-              if (e2) return fail(res, 500, 'Ошибка базы данных');
-              ok(res, { liked: false });
-            }
-          );
+          db.run(`DELETE FROM event_likes WHERE eventId = ? AND userId = ?`, [id, uid], (e2) => afterToggle(false, e2));
         } else {
-          db.run(
-            `INSERT INTO event_likes (eventId, userId) VALUES (?, ?)`,
-            [id, req.user.id],
-            (e3) => {
-              if (e3) return fail(res, 500, 'Ошибка базы данных');
-              ok(res, { liked: true });
-            }
-          );
+          db.run(`INSERT INTO event_likes (eventId, userId) VALUES (?, ?)`, [id, uid], (e3) => afterToggle(true, e3));
         }
       }
     );
@@ -1371,18 +1410,30 @@ app.post('/api/events/:id/like', requireAuth, (req, res) => {
 // Комментарий к публикации.
 app.post('/api/events/:id/comments', requireAuth, (req, res) => {
   const id = toInt(req.params.id);
+  const uid = currentUserId(req);
   const text = String(req.body.text || '').trim();
   if (!id) return fail(res, 400, 'Некорректный id');
+  if (!uid) return fail(res, 401, 'Нужно войти.');
   if (!text) return fail(res, 400, 'Комментарий пустой');
   db.get(`SELECT id FROM events WHERE id = ?`, [id], (e0, row) => {
     if (e0) return fail(res, 500, 'Ошибка базы данных');
     if (!row) return fail(res, 404, 'Публикация не найдена');
     db.run(
       `INSERT INTO event_comments (eventId, userId, text) VALUES (?, ?, ?)`,
-      [id, req.user.id, text.slice(0, 1200)],
+      [id, uid, text.slice(0, 1200)],
       function (e1) {
         if (e1) return fail(res, 500, 'Ошибка базы данных');
-        ok(res, { id: this.lastID });
+        db.get(
+          `SELECT c.id, c.eventId, c.userId, c.text, c.createdAt, u.name AS userName
+           FROM event_comments c
+           LEFT JOIN users u ON u.id = c.userId
+           WHERE c.id = ?`,
+          [this.lastID],
+          (e2, comment) => {
+            if (e2) return fail(res, 500, 'Ошибка базы данных');
+            ok(res, { comment: comment || { id: this.lastID, eventId: id, userId: uid, text } });
+          }
+        );
       }
     );
   });
