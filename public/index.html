@@ -958,6 +958,21 @@
       align-items: flex-start;
     }
 
+    .event-comment-item {
+      display: block;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border-radius: 12px;
+      background: rgba(248, 250, 252, 0.95);
+      border: 1px solid rgba(226, 232, 240, 0.9);
+    }
+
+    .event-likers-line {
+      margin: 6px 0 10px;
+      font-size: 13px;
+      color: var(--text-muted, #64748b);
+    }
+
     .timeline-dot {
       width: 9px;
       height: 9px;
@@ -3322,19 +3337,26 @@
       createWrap.classList.toggle('hidden', !isAdminUser(sessionUser));
       listEl.innerHTML = '<p class="text-muted text-sm">Загрузка публикаций…</p>';
       try {
-        const items = await apiGet('/api/events');
+        const raw = await apiGet('/api/events');
+        const items = Array.isArray(raw) ? raw : [];
         if (!items.length) {
           listEl.innerHTML = '<p class="text-muted text-sm">Пока нет публикаций.</p>';
           return;
         }
         listEl.innerHTML = '';
         items.forEach(ev => {
+          const likers = Array.isArray(ev.likers) ? ev.likers : [];
+          const likersHtml = likers.length
+            ? `<p class="event-likers-line"><i class="fa-regular fa-heart" style="color:#e11d48;margin-right:6px;"></i><strong>Лайкнули:</strong> ${likers.map(l => esc(l.userName || ('#' + l.userId))).join(', ')}</p>`
+            : (Number(ev.likesCount || 0) > 0
+              ? `<p class="event-likers-line text-muted">Лайков: ${Number(ev.likesCount)}</p>`
+              : '');
           const commentsHtml = (ev.comments || [])
             .map(c => (
-              `<li class="timeline-item" style="padding:8px 0;">` +
-                `<div style="font-weight:600;">${esc(c.userName || ('#' + c.userId))}</div>` +
+              `<li class="event-comment-item">` +
+                `<div style="font-weight:600;margin-bottom:4px;">${esc(c.userName || ('Пользователь #' + c.userId))}</div>` +
                 `<div class="text-sm">${esc(c.text)}</div>` +
-                `<div class="text-xs text-muted">${esc(c.createdAt || '')}</div>` +
+                `<div class="text-xs text-muted" style="margin-top:4px;">${esc(c.createdAt || '')}</div>` +
               `</li>`
             ))
             .join('');
@@ -3352,12 +3374,13 @@
               <div class="text-xs text-muted event-meta-stats" style="margin-bottom:8px;">
                 Автор: ${esc(ev.authorName || 'Команда сайта')} · Лайков: ${Number(ev.likesCount || 0)} · Комментариев: ${(ev.comments || []).length}
               </div>
+              ${likersHtml}
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <button type="button" class="btn ${ev.likedByMe ? 'btn-primary' : 'btn-outline'} btn-event-like" data-id="${ev.id}">
                   <i class="fa-regular fa-heart"></i> ${ev.likedByMe ? 'Убрать лайк' : 'Лайк'}
                 </button>
               </div>
-              <ul class="timeline-list" style="margin-top:8px;">${commentsHtml || '<li class="text-xs text-muted">Комментариев пока нет.</li>'}</ul>
+              <ul class="timeline-list event-comments-list" style="margin-top:8px;list-style:none;padding:0;">${commentsHtml || '<li class="text-xs text-muted" style="padding:8px 0;">Комментариев пока нет.</li>'}</ul>
               <form class="event-comment-form" data-id="${ev.id}" style="margin-top:8px;">
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
                   <input class="input event-comment-input" type="text" placeholder="Написать комментарий..." style="flex:1;min-width:220px;" />

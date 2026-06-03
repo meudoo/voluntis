@@ -426,6 +426,22 @@ function eventRowWithMedia(row) {
   };
 }
 
+// Для ленты мероприятий не отдаём base64 в JSON (иначе ответ режется и лайки/комментарии не доходят до клиента).
+function eventPublicView(row) {
+  if (!row) return row;
+  const m = eventRowWithMedia(row);
+  return {
+    id: eventIdNum(m.id),
+    title: m.title,
+    body: m.body,
+    imageUrl: m.imageUrl,
+    videoUrl: m.videoUrl,
+    createdBy: m.createdBy,
+    createdAt: m.createdAt,
+    authorName: m.authorName,
+  };
+}
+
 // Пароль + соль (hex) → ключ scrypt → храним как hex-строку (не храним пароль открытым текстом).
 function hashPassword(password, saltHex) {
   const salt = Buffer.from(saltHex, 'hex');
@@ -1268,8 +1284,9 @@ app.post('/api/admin/users/:id/verification', requireAdmin, (req, res) => {
   });
 });
 
-// Мероприятия: список публикаций + лайки/комментарии.
+// Мероприятия: список публикаций + лайки/комментарии (видны всем, в т.ч. другим аккаунтам).
 app.get('/api/events', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   db.all(
     `SELECT e.id, e.title, e.body, e.imageUrl, e.videoUrl, e.imageData, e.videoData, e.createdBy, e.createdAt, u.name AS authorName
      FROM events e
@@ -1295,47 +1312,74 @@ app.get('/api/events', (req, res) => {
             likesMap[eventIdNum(r.eventId)] = Number(r.likesCount || 0);
           });
 
-          const finishWithComments = (likedIdsSet) => {
-            db.all(
-              `SELECT c.id, c.eventId, c.userId, c.text, c.createdAt, u.name AS userName
-               FROM event_comments c
-               LEFT JOIN users u ON u.id = c.userId
-               WHERE c.eventId IN (${placeholders})
-               ORDER BY c.id ASC`,
-              ids,
-              (eComments, commentRows) => {
-                if (eComments) return fail(res, 500, 'Ошибка базы данных');
-                const commentsMap = {};
-                (commentRows || []).forEach(c => {
-                  const eid = eventIdNum(c.eventId);
-                  if (!commentsMap[eid]) commentsMap[eid] = [];
-                  commentsMap[eid].push(c);
-                });
-                const out = eventsRows.map(ev => {
-                  const base = eventRowWithMedia(ev);
-                  const eid = eventIdNum(ev.id);
-                  return {
-                    ...base,
-                    id: eid,
-                    likesCount: likesMap[eid] || 0,
-                    likedByMe: !!(likedIdsSet && likedIdsSet.has(eid)),
-                    comments: commentsMap[eid] || [],
-                  };
-                });
-                ok(res, out);
-              }
-            );
-          };
-
-          const uid = currentUserId(req);
-          if (!uid) return finishWithComments(null);
           db.all(
-            `SELECT eventId FROM event_likes WHERE userId = ? AND eventId IN (${placeholders})`,
-            [uid, ...ids],
-            (eMyLikes, myLikesRows) => {
-              if (eMyLikes) return fail(res, 500, 'Ошибка базы данных');
-              const likedIdsSet = new Set((myLikesRows || []).map(r => eventIdNum(r.eventId)));
-              finishWithComments(likedIdsSet);
+            `SELECT el.eventId, el.userId, u.name AS userName
+             FROM event_likes el
+             LEFT JOIN users u ON u.id = el.userId
+             WHERE el.eventId IN (${placeholders})
+             ORDER BY el.eventId ASC, el.createdAt ASC`,
+            ids,
+            (eLikers, likerRows) => {
+              if (eLikers) return fail(res, 500, 'Ошибка базы данных');
+              const likersMap = {};
+              (likerRows || []).forEach(r => {
+                const eid = eventIdNum(r.eventId);
+                if (!likersMap[eid]) likersMap[eid] = [];
+                likersMap[eid].push({
+                  userId: r.userId,
+                  userName: r.userName || ('Пользователь #' + r.userId),
+                });
+              });
+
+              const finishWithComments = (likedIdsSet) => {
+                db.all(
+                  `SELECT c.id, c.eventId, c.userId, c.text, c.createdAt, u.name AS userName
+                   FROM event_comments c
+                   LEFT JOIN users u ON u.id = c.userId
+                   WHERE c.eventId IN (${placeholders})
+                   ORDER BY c.id ASC`,
+                  ids,
+                  (eComments, commentRows) => {
+                    if (eComments) return fail(res, 500, 'Ошибка базы данных');
+                    const commentsMap = {};
+                    (commentRows || []).forEach(c => {
+                      const eid = eventIdNum(c.eventId);
+                      if (!commentsMap[eid]) commentsMap[eid] = [];
+                      commentsMap[eid].push({
+                        id: c.id,
+                        eventId: eid,
+                        userId: c.userId,
+                        text: c.text,
+                        createdAt: c.createdAt,
+                        userName: c.userName || ('Пользователь #' + c.userId),
+                      });
+                    });
+                    const out = eventsRows.map(ev => {
+                      const eid = eventIdNum(ev.id);
+                      return {
+                        ...eventPublicView(ev),
+                        likesCount: likesMap[eid] || 0,
+                        likers: likersMap[eid] || [],
+                        likedByMe: !!(likedIdsSet && likedIdsSet.has(eid)),
+                        comments: commentsMap[eid] || [],
+                      };
+                    });
+                    ok(res, out);
+                  }
+                );
+              };
+
+              const uid = currentUserId(req);
+              if (!uid) return finishWithComments(null);
+              db.all(
+                `SELECT eventId FROM event_likes WHERE userId = ? AND eventId IN (${placeholders})`,
+                [uid, ...ids],
+                (eMyLikes, myLikesRows) => {
+                  if (eMyLikes) return fail(res, 500, 'Ошибка базы данных');
+                  const likedIdsSet = new Set((myLikesRows || []).map(r => eventIdNum(r.eventId)));
+                  finishWithComments(likedIdsSet);
+                }
+              );
             }
           );
         }
