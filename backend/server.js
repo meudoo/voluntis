@@ -62,13 +62,27 @@ const eventUpload = multer({
   { name: 'video', maxCount: 1 },
 ]);
 
-// Путь к SQLite: на Render с Persistent Disk укажите DATABASE_PATH=/var/data/database.sqlite
+// Путь к SQLite: на Render с Persistent Disk — DATABASE_PATH=/var/data/database.sqlite
+const legacyDbPath = path.join(__dirname, 'database.sqlite');
 const dbPath = process.env.DATABASE_PATH
   ? path.resolve(process.env.DATABASE_PATH)
-  : path.join(__dirname, 'database.sqlite');
+  : path.join(__dirname, 'data', 'database.sqlite');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+if (!fs.existsSync(dbPath) && fs.existsSync(legacyDbPath)) {
+  try {
+    fs.copyFileSync(legacyDbPath, dbPath);
+    console.log('SQLite: скопирована старая база в', dbPath);
+  } catch (e) {
+    console.warn('SQLite: не удалось скопировать старую базу:', e.message);
+  }
+}
 const db = new sqlite3.Database(dbPath);
 db.configure('busyTimeout', 5000);
+db.serialize(() => {
+  db.run('PRAGMA journal_mode = WAL');
+  db.run('PRAGMA synchronous = FULL');
+});
+console.log('SQLite:', dbPath);
 
 // ----------------------------
 // Мини-миграции (чтобы не удалять базу руками)
@@ -316,6 +330,14 @@ function fail(res, status, msg) {
 function toInt(x) {
   const n = parseInt(x, 10);
   return Number.isFinite(n) ? n : null;
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function normalizeName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ');
 }
 
 function eventIdNum(x) {
@@ -705,38 +727,45 @@ db.get(`SELECT value FROM meta WHERE key = 'didCleanupRequestsAndChats'`, [], (e
 
 // Регистрация: сразу выдаём токен и пишем сессию.
 app.post('/api/register', rateLimit('register', 10, 60_000), (req, res) => {
-  // Регистрация: создаём пользователя и сессию, возвращаем token и user.
-  // Тело: name, email, password обязательны; role опционально (иначе volunteer).
   const { name, email, password, role } = req.body;
-  if (!name || !email || !password) return res.status(400).json({ error: 'Не заполнены поля' });
+  const normName = normalizeName(name);
+  const normEmail = normalizeEmail(email);
+  const pass = String(password || '');
+  if (!normName || !normEmail || !pass) return fail(res, 400, 'Заполните имя, email и пароль.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) return fail(res, 400, 'Некорректный email.');
+  if (pass.length < 4) return fail(res, 400, 'Пароль должен быть не короче 4 символов.');
 
-  // Только две роли при регистрации; admin через сид, не через форму.
-  const safeRole = (role === 'seeker') ? 'seeker' : 'volunteer';
-
+  const safeRole = role === 'seeker' ? 'seeker' : 'volunteer';
   const salt = newSaltHex();
-  const passHash = hashPassword(password, salt);
+  const passHash = hashPassword(pass, salt);
 
-  // password в таблице оставляем пустым: актуальные данные в passwordSalt + passwordHash.
   db.run(
     `INSERT INTO users (name, email, password, passwordSalt, passwordHash, role)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [name, email, '', salt, passHash, safeRole],
+     VALUES (?, ?, '', ?, ?, ?)`,
+    [normName, normEmail, salt, passHash, safeRole],
     function (err) {
       if (err) {
-        if (String(err).includes('UNIQUE')) return res.status(409).json({ error: 'Пользователь с таким email уже есть' });
-        return res.status(500).json({ error: 'Ошибка базы данных' });
+        if (String(err).includes('UNIQUE')) {
+          return fail(res, 409, 'Пользователь с таким email уже зарегистрирован. Войдите или восстановите доступ через тот же email.');
+        }
+        console.error('register INSERT users:', err);
+        return fail(res, 500, 'Ошибка сохранения аккаунта в базе.');
       }
-      const newUserId = this.lastID; // здесь this — контекст INSERT в users; во вложенном callback уже другой this
+      const newUserId = this.lastID;
       const token = newToken();
       db.run(`INSERT INTO sessions (userId, token) VALUES (?, ?)`, [newUserId, token], (e2) => {
-        if (e2) return fail(res, 500, 'Ошибка базы данных');
-        audit(newUserId, 'register', 'user', newUserId, { email, role: safeRole });
+        if (e2) {
+          console.error('register INSERT session:', e2);
+          db.run(`DELETE FROM users WHERE id = ?`, [newUserId], () => {});
+          return fail(res, 500, 'Аккаунт не удалось завершить (сессия). Попробуйте войти по email и паролю.');
+        }
+        audit(newUserId, 'register', 'user', newUserId, { email: normEmail, role: safeRole });
         db.get(
           `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone FROM users WHERE id = ?`,
           [newUserId],
           (e3, u) => {
             if (e3 || !u) return fail(res, 500, 'Ошибка базы данных');
-            ok(res, { token, user: u });
+            ok(res, { token, user: u, saved: true });
           }
         );
       });
@@ -746,13 +775,15 @@ app.post('/api/register', rateLimit('register', 10, 60_000), (req, res) => {
 
 // Вход по email/паролю; поддерживаются старые записи только с полем password (без соли).
 app.post('/api/login', rateLimit('login', 20, 60_000), (req, res) => {
-  // Вход: проверка пароля (scrypt или устаревший открытый), выдача новой сессии.
   const { email, password } = req.body;
+  const normEmail = normalizeEmail(email);
+  const pass = String(password || '');
+  if (!normEmail || !pass) return fail(res, 400, 'Введите email и пароль.');
 
   db.get(
     `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, password, passwordSalt, passwordHash, banUntil, banReason
-     FROM users WHERE email = ?`,
-    [email],
+     FROM users WHERE lower(trim(email)) = ?`,
+    [normEmail],
     (err, row) => {
       if (err) return fail(res, 500, 'Ошибка базы данных');
       if (!row) return fail(res, 401, 'Неверный логин или пароль');
@@ -766,17 +797,17 @@ app.post('/api/login', rateLimit('login', 20, 60_000), (req, res) => {
       // поддержка старых пользователей, у которых пароль был в открытом виде
       let okPass = false;
       if (row.passwordHash && row.passwordSalt) {
-        const calc = hashPassword(password, row.passwordSalt);
-        okPass = (calc === row.passwordHash);
+        const calc = hashPassword(pass, row.passwordSalt);
+        okPass = calc === row.passwordHash;
       } else {
-        okPass = (String(password) === String(row.password || ''));
+        okPass = pass === String(row.password || '');
       }
       if (!okPass) return fail(res, 401, 'Неверный логин или пароль');
 
       // миграция: если пароль был "плоский" — запишем хэш
       if (!row.passwordHash || !row.passwordSalt) {
         const salt = newSaltHex();
-        const passHash = hashPassword(password, salt);
+        const passHash = hashPassword(pass, salt);
         db.run(`UPDATE users SET password = '', passwordSalt = ?, passwordHash = ? WHERE id = ?`, [salt, passHash, row.id]);
       }
 

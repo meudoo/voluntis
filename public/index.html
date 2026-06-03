@@ -4800,13 +4800,24 @@
       });
     })();
 
+    function assertAuthResponse(out, actionLabel) {
+      if (!out || !out.token || !out.user || !out.user.id) {
+        throw new Error(
+          actionLabel +
+            ' не сохранился на сервере. Проверьте URL API (страница «Вход» → «Связь с API») или зарегистрируйтесь заново после обновления сайта на Render.'
+        );
+      }
+    }
+
     // Вход: POST /api/login → сохраняем токен и объект пользователя, обновляем шапку, переходим на главную.
     document.getElementById('loginForm').addEventListener('submit', async e => {
       e.preventDefault();
-      const email = document.getElementById('loginEmail').value.trim();
+      const email = document.getElementById('loginEmail').value.trim().toLowerCase();
       const password = document.getElementById('loginPassword').value;
+      if (!email || !password) return alert('Введите email и пароль.');
       try {
         const out = await apiPost('/api/login', { email, password });
+        assertAuthResponse(out, 'Вход');
         saveToken(out.token);
         sessionUser = out.user;
         viewedUserId = null;
@@ -4823,13 +4834,16 @@
     // Регистрация: POST /api/register → сразу логиним как после входа.
     document.getElementById('registerForm').addEventListener('submit', async e => {
       e.preventDefault();
-      const name = document.getElementById('regName').value.trim();
-      const email = document.getElementById('regEmail').value.trim();
+      const name = document.getElementById('regName').value.trim().replace(/\s+/g, ' ');
+      const email = document.getElementById('regEmail').value.trim().toLowerCase();
       const password = document.getElementById('regPassword').value;
       const role = document.getElementById('regRole').value;
+      if (!name || !email || !password) return alert('Заполните все поля.');
+      if (password.length < 4) return alert('Пароль должен быть не короче 4 символов.');
 
       try {
         const out = await apiPost('/api/register', { name, email, password, role });
+        assertAuthResponse(out, 'Регистрация');
         saveToken(out.token);
         sessionUser = out.user;
         viewedUserId = null;

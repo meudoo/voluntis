@@ -14,3 +14,6 @@ services:
         value: "20"
       - key: npm_config_build_from_source
         value: "sqlite3"
+      # База в подпапке data (на Render при деплое БД может обнуляться — тогда регистрация заново).
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/backend/data/database.sqlite

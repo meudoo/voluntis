@@ -3,6 +3,7 @@ backend/node_modules/
 netlify-publish/
 deploy-site/
 backend/database.sqlite
+backend/data/
 public/uploads/events/*
 !public/uploads/events/.gitkeep
 .env
