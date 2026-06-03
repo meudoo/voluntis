@@ -9,11 +9,16 @@ services:
     buildCommand: npm run render-build
     startCommand: node server.js
     healthCheckPath: /api/health
+    # Постоянный диск (платный план Render): база не сбрасывается при деплое.
+    # disk:
+    #   name: voluntis-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "20"
       - key: npm_config_build_from_source
         value: "sqlite3"
-      # База в подпапке data (на Render при деплое БД может обнуляться — тогда регистрация заново).
-      - key: DATABASE_PATH
-        value: /opt/render/project/src/backend/data/database.sqlite
+      # Раскомментируйте вместе с disk выше:
+      # - key: DATABASE_PATH
+      #   value: /var/data/database.sqlite

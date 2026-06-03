@@ -1950,7 +1950,7 @@
 
             <form id="loginForm">
               <h2 class="form-title">Вход</h2>
-              <p class="form-subtitle">Продолжите с существующим аккаунтом.</p>
+              <p class="form-subtitle">Продолжите с существующим аккаунтом. Если после обновления сайта вход не работает — зарегистрируйтесь снова с тем же email.</p>
 
               <div class="form-group">
                 <label class="form-label">Email</label>
@@ -2143,7 +2143,12 @@
               <form id="adminUserForm" class="mt-sm">
                 <div class="form-group">
                   <label class="form-label">Email пользователя</label>
-                  <input class="input" id="adminUserEmail" />
+                  <input class="input" id="adminUserEmail" type="email" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Новый пароль (если не входит)</label>
+                  <input type="password" class="input" id="adminUserNewPassword" placeholder="Оставьте пустым, если не менять" />
+                  <p class="text-xs text-muted" style="margin-top:4px;">Минимум 4 символа. Сохранится в базе на сервере.</p>
                 </div>
                 <div class="form-group">
                   <label class="form-label">Найти пользователя по email</label>
@@ -4752,13 +4757,23 @@
     document.getElementById('adminUserForm').addEventListener('submit', async e => {
       e.preventDefault();
       if (!sessionUser || sessionUser.role !== 'admin') return;
-      const email = document.getElementById('adminUserEmail').value.trim();
+      const email = document.getElementById('adminUserEmail').value.trim().toLowerCase();
+      const newPassword = document.getElementById('adminUserNewPassword')
+        ? document.getElementById('adminUserNewPassword').value
+        : '';
       const pointsDelta = parseInt(document.getElementById('adminPointsDelta').value, 10) || 0;
       const status = document.getElementById('adminStatus').value;
       const seekerVerification = document.getElementById('adminSeekerVerification').value;
       const volunteerVerification = document.getElementById('adminVolunteerVerification').value;
       try {
-        await apiPost('/api/admin/users/update', { email, pointsDelta, status, seekerVerification, volunteerVerification });
+        await apiPost('/api/admin/users/update', {
+          email,
+          newPassword: newPassword || undefined,
+          pointsDelta,
+          status,
+          seekerVerification,
+          volunteerVerification,
+        });
         alert('Изменения применены.');
         e.target.reset();
         renderAdmin();
@@ -4867,12 +4882,20 @@
       try {
         const out = await apiPost('/api/register', { name, email, password, role });
         assertAuthResponse(out, 'Регистрация');
+        if (!out.saved) {
+          throw new Error('Сервер не подтвердил сохранение аккаунта.');
+        }
         saveToken(out.token);
         sessionUser = out.user;
         viewedUserId = null;
         saveSession(sessionUser);
         updateHeader();
-        alert('Регистрация завершена. Вы вошли.');
+        const emailSaved = out.user.email || email;
+        alert(
+          out.alreadyRegistered
+            ? 'Этот email уже был в базе — выполнен вход (' + emailSaved + ').'
+            : 'Аккаунт сохранён в базе (' + emailSaved + '). Вы вошли.'
+        );
         showPage('home');
       } catch (err) {
         alert('Не получилось: ' + err.message);

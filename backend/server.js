@@ -62,20 +62,36 @@ const eventUpload = multer({
   { name: 'video', maxCount: 1 },
 ]);
 
-// Путь к SQLite: на Render с Persistent Disk — DATABASE_PATH=/var/data/database.sqlite
+// Один файл базы: backend/database.sqlite (на Render при деплое может обнуляться — регистрация заново).
 const legacyDbPath = path.join(__dirname, 'database.sqlite');
-const dbPath = process.env.DATABASE_PATH
-  ? path.resolve(process.env.DATABASE_PATH)
-  : path.join(__dirname, 'data', 'database.sqlite');
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-if (!fs.existsSync(dbPath) && fs.existsSync(legacyDbPath)) {
-  try {
-    fs.copyFileSync(legacyDbPath, dbPath);
-    console.log('SQLite: скопирована старая база в', dbPath);
-  } catch (e) {
-    console.warn('SQLite: не удалось скопировать старую базу:', e.message);
+const altDbPath = path.join(__dirname, 'data', 'database.sqlite');
+
+function pickDbPath() {
+  if (process.env.DATABASE_PATH) return path.resolve(process.env.DATABASE_PATH);
+  if (!fs.existsSync(altDbPath)) return legacyDbPath;
+  if (!fs.existsSync(legacyDbPath)) {
+    try {
+      fs.mkdirSync(path.dirname(altDbPath), { recursive: true });
+      fs.copyFileSync(altDbPath, legacyDbPath);
+      console.log('SQLite: скопирована база из data/ в database.sqlite');
+    } catch (e) {
+      console.warn('SQLite: copy data->legacy failed:', e.message);
+    }
+    return legacyDbPath;
   }
+  try {
+    const sLegacy = fs.statSync(legacyDbPath).size;
+    const sAlt = fs.statSync(altDbPath).size;
+    if (sAlt > sLegacy + 1024) {
+      fs.copyFileSync(altDbPath, legacyDbPath);
+      console.log('SQLite: использована более полная база из data/');
+    }
+  } catch (_) {}
+  return legacyDbPath;
 }
+
+const dbPath = pickDbPath();
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new sqlite3.Database(dbPath);
 db.configure('busyTimeout', 5000);
 db.serialize(() => {
@@ -83,6 +99,157 @@ db.serialize(() => {
   db.run('PRAGMA synchronous = FULL');
 });
 console.log('SQLite:', dbPath);
+
+const usersBackupPath = path.join(__dirname, 'data', 'users-auth-backup.json');
+
+function mirrorDatabaseCopy() {
+  try {
+    if (path.resolve(dbPath) !== path.resolve(altDbPath) && fs.existsSync(dbPath)) {
+      fs.mkdirSync(path.dirname(altDbPath), { recursive: true });
+      fs.copyFileSync(dbPath, altDbPath);
+    }
+  } catch (e) {
+    console.warn('SQLite mirror:', e.message);
+  }
+}
+
+function persistUsersBackup() {
+  db.all(
+    `SELECT name, email, password, passwordSalt, passwordHash, role, points, completed, ratingSum, ratingCount, status,
+            city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus,
+            seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote
+     FROM users`,
+    [],
+    (err, rows) => {
+      if (err || !rows) return;
+      try {
+        fs.mkdirSync(path.dirname(usersBackupPath), { recursive: true });
+        fs.writeFileSync(
+          usersBackupPath,
+          JSON.stringify({ savedAt: new Date().toISOString(), users: rows }),
+          'utf8'
+        );
+        mirrorDatabaseCopy();
+      } catch (e) {
+        console.warn('users backup:', e.message);
+      }
+    }
+  );
+}
+
+function importUserRowIfMissing(u, done) {
+  const em = normalizeEmail(u.email);
+  if (!em) return done(false);
+  db.get(`SELECT id FROM users WHERE lower(trim(email)) = ?`, [em], (e2, ex) => {
+    if (ex) return done(false);
+    const salt = u.passwordSalt || newSaltHex();
+    let passHash = u.passwordHash;
+    if (!passHash && u.password) passHash = hashPassword(String(u.password), salt);
+    if (!passHash) return done(false);
+    db.run(
+      `INSERT INTO users (name, email, password, passwordSalt, passwordHash, role, points, completed, ratingSum, ratingCount, status,
+        city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote)
+       VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        normalizeName(u.name) || em,
+        em,
+        salt,
+        passHash,
+        u.role || 'volunteer',
+        u.points || 0,
+        u.completed || 0,
+        u.ratingSum || 0,
+        u.ratingCount || 0,
+        u.status || 'active',
+        u.city || null,
+        u.age || null,
+        u.about || null,
+        u.seekerVerified || 0,
+        u.volunteerVerified || 0,
+        u.seekerFormStatus || 'not_submitted',
+        u.volunteerFormStatus || 'not_submitted',
+        u.seekerPhone || null,
+        u.volunteerPhone || null,
+        u.seekerFormNote || null,
+        u.volunteerFormNote || null,
+      ],
+      (e3) => done(!e3)
+    );
+  });
+}
+
+function importUsersList(rows, done) {
+  if (!rows || !rows.length) return done(0);
+  let pending = rows.length;
+  let copied = 0;
+  rows.forEach((u) => {
+    importUserRowIfMissing(u, (ok) => {
+      if (ok) copied += 1;
+      if (--pending === 0) done(copied);
+    });
+  });
+}
+
+function restoreUsersFromJsonBackup(done) {
+  if (!fs.existsSync(usersBackupPath)) return done(0);
+  try {
+    const raw = JSON.parse(fs.readFileSync(usersBackupPath, 'utf8'));
+    const rows = raw && raw.users ? raw.users : raw;
+    if (!Array.isArray(rows) || !rows.length) return done(0);
+    importUsersList(rows, done);
+  } catch (e) {
+    console.warn('restore users backup:', e.message);
+    done(0);
+  }
+}
+
+function migrateUsersFromSqliteFile(sourcePath, done) {
+  if (!sourcePath || !fs.existsSync(sourcePath)) return done(0);
+  if (path.resolve(sourcePath) === path.resolve(dbPath)) return done(0);
+  const src = new sqlite3.Database(sourcePath, sqlite3.OPEN_READONLY);
+  src.all(
+    `SELECT name, email, password, passwordSalt, passwordHash, role, points, completed, ratingSum, ratingCount, status,
+            city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus,
+            seekerPhone, volunteerPhone, seekerFormNote, volunteerFormNote
+     FROM users`,
+    [],
+    (err, rows) => {
+      src.close();
+      if (err || !rows || !rows.length) return done(0);
+      importUsersList(rows, done);
+    }
+  );
+}
+
+const USER_PUBLIC_COLS = `id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone`;
+
+function verifyPasswordForRow(row, pass) {
+  if (row.passwordHash && row.passwordSalt) {
+    return hashPassword(pass, row.passwordSalt) === row.passwordHash;
+  }
+  return pass === String(row.password || '');
+}
+
+function sendAuthSuccess(res, token, user, meta) {
+  persistUsersBackup();
+  ok(res, Object.assign({ token, user, saved: true }, meta || {}));
+}
+
+function createSessionForUser(row, pass, res, meta) {
+  const token = newToken();
+  db.run(`INSERT INTO sessions (userId, token) VALUES (?, ?)`, [row.id, token], (e2) => {
+    if (e2) return fail(res, 500, 'Ошибка создания сессии.');
+    if (!row.passwordHash || !row.passwordSalt) {
+      const salt = newSaltHex();
+      const passHash = hashPassword(pass, salt);
+      db.run(`UPDATE users SET password = '', passwordSalt = ?, passwordHash = ? WHERE id = ?`, [salt, passHash, row.id]);
+    }
+    db.get(`SELECT ${USER_PUBLIC_COLS} FROM users WHERE id = ?`, [row.id], (e3, u) => {
+      if (e3 || !u) return fail(res, 500, 'Ошибка чтения профиля после входа.');
+      sendAuthSuccess(res, token, u, meta);
+    });
+  });
+}
 
 // ----------------------------
 // Мини-миграции (чтобы не удалять базу руками)
@@ -642,7 +809,20 @@ function seedIfEmpty() {
   });
 }
 
-seedIfEmpty();
+function bootstrapUserStorage() {
+  restoreUsersFromJsonBackup((fromJson) => {
+    if (fromJson) console.log('SQLite: восстановлено из users-auth-backup.json:', fromJson);
+    migrateUsersFromSqliteFile(altDbPath, (fromAlt) => {
+      if (fromAlt) console.log('SQLite: перенесено из data/database.sqlite:', fromAlt);
+      seedIfEmpty();
+      db.get(`SELECT COUNT(*) AS c FROM users`, [], (e, row) => {
+        if (!e && row) console.log('SQLite: пользователей в базе:', row.c);
+      });
+    });
+  });
+}
+
+bootstrapUserStorage();
 
 function seedWelcomeEventIfEmpty() {
   const welcomeBody =
@@ -741,7 +921,7 @@ db.get(`SELECT value FROM meta WHERE key = 'didCleanupRequestsAndChats'`, [], (e
  * GET /top/volunteers — рейтинг; GET /admin/stats — сводка; GET /admin/export?kind= — CSV.
  */
 
-// Регистрация: сразу выдаём токен и пишем сессию.
+// Регистрация: транзакция (пользователь + сессия), резервная копия, проверка пароля.
 app.post('/api/register', rateLimit('register', 10, 60_000), (req, res) => {
   const { name, email, password, role } = req.body;
   const normName = normalizeName(name);
@@ -755,38 +935,70 @@ app.post('/api/register', rateLimit('register', 10, 60_000), (req, res) => {
   const salt = newSaltHex();
   const passHash = hashPassword(pass, salt);
 
-  db.run(
-    `INSERT INTO users (name, email, password, passwordSalt, passwordHash, role)
-     VALUES (?, ?, '', ?, ?, ?)`,
-    [normName, normEmail, salt, passHash, safeRole],
-    function (err) {
-      if (err) {
-        if (String(err).includes('UNIQUE')) {
-          return fail(res, 409, 'Пользователь с таким email уже зарегистрирован. Войдите или восстановите доступ через тот же email.');
-        }
-        console.error('register INSERT users:', err);
-        return fail(res, 500, 'Ошибка сохранения аккаунта в базе.');
-      }
-      const newUserId = this.lastID;
-      const token = newToken();
-      db.run(`INSERT INTO sessions (userId, token) VALUES (?, ?)`, [newUserId, token], (e2) => {
-        if (e2) {
-          console.error('register INSERT session:', e2);
-          db.run(`DELETE FROM users WHERE id = ?`, [newUserId], () => {});
-          return fail(res, 500, 'Аккаунт не удалось завершить (сессия). Попробуйте войти по email и паролю.');
-        }
-        audit(newUserId, 'register', 'user', newUserId, { email: normEmail, role: safeRole });
-        db.get(
-          `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone FROM users WHERE id = ?`,
-          [newUserId],
-          (e3, u) => {
-            if (e3 || !u) return fail(res, 500, 'Ошибка базы данных');
-            ok(res, { token, user: u, saved: true });
+  const finishNewUser = (newUserId, token) => {
+    db.get(`SELECT ${USER_PUBLIC_COLS} FROM users WHERE id = ?`, [newUserId], (e3, u) => {
+      if (e3 || !u) return fail(res, 500, 'Аккаунт создан, но не найден в базе. Попробуйте войти.');
+      db.get(
+        `SELECT passwordHash, passwordSalt FROM users WHERE id = ?`,
+        [newUserId],
+        (e4, chk) => {
+          if (e4 || !chk || !verifyPasswordForRow(chk, pass)) {
+            return fail(res, 500, 'Ошибка проверки сохранённого пароля. Попробуйте войти.');
           }
-        );
-      });
-    }
-  );
+          audit(newUserId, 'register', 'user', newUserId, { email: normEmail, role: safeRole });
+          sendAuthSuccess(res, token, u, { registered: true });
+        }
+      );
+    });
+  };
+
+  const loginExisting = () => {
+    db.get(
+      `SELECT id, name, email, role, points, completed, ratingSum, ratingCount, status, city, age, about, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, seekerPhone, volunteerPhone, password, passwordSalt, passwordHash, banUntil, banReason
+       FROM users WHERE lower(trim(email)) = ?`,
+      [normEmail],
+      (e0, row) => {
+        if (e0) return fail(res, 500, 'Ошибка базы данных');
+        if (!row) return fail(res, 409, 'Email занят, но запись не найдена. Обратитесь к администратору.');
+        if (row.status === 'blocked') return fail(res, 403, 'Аккаунт заблокирован.');
+        if (!verifyPasswordForRow(row, pass)) {
+          return fail(res, 409, 'Этот email уже зарегистрирован. Введите правильный пароль на вкладке «Вход».');
+        }
+        audit(row.id, 'register_existing_login', 'user', row.id, { email: normEmail });
+        createSessionForUser(row, pass, res, { alreadyRegistered: true });
+      }
+    );
+  };
+
+  db.serialize(() => {
+    db.run('BEGIN IMMEDIATE');
+    db.run(
+      `INSERT INTO users (name, email, password, passwordSalt, passwordHash, role)
+       VALUES (?, ?, '', ?, ?, ?)`,
+      [normName, normEmail, salt, passHash, safeRole],
+      function (err) {
+        if (err) {
+          db.run('ROLLBACK');
+          if (String(err).includes('UNIQUE')) return loginExisting();
+          console.error('register INSERT users:', err);
+          return fail(res, 500, 'Ошибка сохранения аккаунта в базе.');
+        }
+        const newUserId = this.lastID;
+        const token = newToken();
+        db.run(`INSERT INTO sessions (userId, token) VALUES (?, ?)`, [newUserId, token], (e2) => {
+          if (e2) {
+            console.error('register INSERT session:', e2);
+            db.run('ROLLBACK');
+            return fail(res, 500, 'Аккаунт не удалось завершить. Попробуйте войти по email и паролю.');
+          }
+          db.run('COMMIT', (eCommit) => {
+            if (eCommit) return fail(res, 500, 'Ошибка фиксации регистрации в базе.');
+            finishNewUser(newUserId, token);
+          });
+        });
+      }
+    );
+  });
 });
 
 // Вход по email/паролю; поддерживаются старые записи только с полем password (без соли).
@@ -802,7 +1014,13 @@ app.post('/api/login', rateLimit('login', 20, 60_000), (req, res) => {
     [normEmail],
     (err, row) => {
       if (err) return fail(res, 500, 'Ошибка базы данных');
-      if (!row) return fail(res, 401, 'Неверный логин или пароль');
+      if (!row) {
+        return fail(
+          res,
+          401,
+          'Аккаунт с таким email не найден. После обновления сайта на Render база могла обнулиться — зарегистрируйтесь снова с тем же email и паролем.'
+        );
+      }
       if (row.status === 'blocked') return fail(res, 403, 'Аккаунт заблокирован.');
       const nowLogin = new Date().toISOString().slice(0, 19).replace('T', ' ');
       if (row.banUntil && row.banUntil > nowLogin) {
@@ -810,49 +1028,10 @@ app.post('/api/login', rateLimit('login', 20, 60_000), (req, res) => {
         return fail(res, 403, `Ваш аккаунт заблокирован до ${row.banUntil}.${reasonText}`);
       }
 
-      // поддержка старых пользователей, у которых пароль был в открытом виде
-      let okPass = false;
-      if (row.passwordHash && row.passwordSalt) {
-        const calc = hashPassword(pass, row.passwordSalt);
-        okPass = calc === row.passwordHash;
-      } else {
-        okPass = pass === String(row.password || '');
-      }
-      if (!okPass) return fail(res, 401, 'Неверный логин или пароль');
+      if (!verifyPasswordForRow(row, pass)) return fail(res, 401, 'Неверный пароль для этого email.');
 
-      // миграция: если пароль был "плоский" — запишем хэш
-      if (!row.passwordHash || !row.passwordSalt) {
-        const salt = newSaltHex();
-        const passHash = hashPassword(pass, salt);
-        db.run(`UPDATE users SET password = '', passwordSalt = ?, passwordHash = ? WHERE id = ?`, [salt, passHash, row.id]);
-      }
-
-      const token = newToken();
-      db.run(`INSERT INTO sessions (userId, token) VALUES (?, ?)`, [row.id, token], (e2) => {
-        if (e2) return fail(res, 500, 'Ошибка базы данных');
-        audit(row.id, 'login', 'user', row.id, { email });
-        const user = {
-          id: row.id,
-          name: row.name,
-          email: row.email,
-          role: row.role,
-          points: row.points,
-          completed: row.completed,
-          ratingSum: row.ratingSum,
-          ratingCount: row.ratingCount,
-          status: row.status,
-          city: row.city,
-          age: row.age,
-          about: row.about,
-          seekerVerified: row.seekerVerified || 0,
-          volunteerVerified: row.volunteerVerified || 0,
-          seekerFormStatus: row.seekerFormStatus || 'not_submitted',
-          volunteerFormStatus: row.volunteerFormStatus || 'not_submitted',
-          seekerPhone: row.seekerPhone || null,
-          volunteerPhone: row.volunteerPhone || null
-        };
-        ok(res, { token, user });
-      });
+      audit(row.id, 'login', 'user', row.id, { email: normEmail });
+      createSessionForUser(row, pass, res, { loggedIn: true });
     }
   );
 });
@@ -2340,7 +2519,8 @@ app.get('/api/admin/users/blocked', requireAdmin, (req, res) => {
 
 // admin: управление пользователями (баллы/статус/ограничения)
 app.post('/api/admin/users/update', requireAdmin, (req, res) => {
-  const email = String(req.body.email || '').trim();
+  const email = normalizeEmail(req.body.email);
+  const newPassword = String(req.body.newPassword || '');
   const pointsDelta = toInt(req.body.pointsDelta) || 0;
   const status = String(req.body.status || 'keep'); // keep|active|limited|blocked
   const punishmentType = String(req.body.punishmentType || 'none'); // block_temp, block_perm, limit_chat, limit_requests, limit_both, remove_limits
@@ -2355,7 +2535,7 @@ app.post('/api/admin/users/update', requireAdmin, (req, res) => {
     return fail(res, 400, 'Укажите причину для наказания');
   }
 
-  db.get(`SELECT * FROM users WHERE email = ?`, [email], (e0, u) => {
+  db.get(`SELECT * FROM users WHERE lower(trim(email)) = ?`, [email], (e0, u) => {
     if (e0) return fail(res, 500, 'Ошибка базы данных');
     if (!u) return fail(res, 404, 'Пользователь не найден');
 
@@ -2420,36 +2600,77 @@ app.post('/api/admin/users/update', requireAdmin, (req, res) => {
       volunteerFormStatus = 'pending';
     }
 
-    db.run(
-      `UPDATE users
-       SET points = MAX(points + ?, 0),
-           status = ?,
-           banUntil = ?,
-           banReason = ?,
-           chatLimitedUntil = ?,
-           requestsLimitedUntil = ?,
-           seekerVerified = ?,
-           volunteerVerified = ?,
-           seekerFormStatus = ?,
-           volunteerFormStatus = ?
-       WHERE id = ?`,
-      [deltaPoints, finalStatus, banUntil, banReason, chatLimitedUntil, requestsLimitedUntil, seekerVerified, volunteerVerified, seekerFormStatus, volunteerFormStatus, u.id],
-      function (err) {
-        if (err) return fail(res, 500, 'Ошибка базы данных');
-        audit(req.user.id, 'admin_user_update', 'user', u.id, {
-          email,
-          pointsDelta: deltaPoints,
-          status: finalStatus,
-          punishmentType,
-          punishmentReason,
-          durationDays,
-          resetPoints,
-          seekerVerification,
-          volunteerVerification,
-        });
-        ok(res, { ok: true });
-      }
-    );
+    const applyUpdate = (salt, passHash) => {
+      db.run(
+        `UPDATE users
+         SET points = MAX(points + ?, 0),
+             status = ?,
+             banUntil = ?,
+             banReason = ?,
+             chatLimitedUntil = ?,
+             requestsLimitedUntil = ?,
+             seekerVerified = ?,
+             volunteerVerified = ?,
+             seekerFormStatus = ?,
+             volunteerFormStatus = ?
+             ${passHash ? ', password = ?, passwordSalt = ?, passwordHash = ?' : ''}
+         WHERE id = ?`,
+        passHash
+          ? [
+            deltaPoints,
+            finalStatus,
+            banUntil,
+            banReason,
+            chatLimitedUntil,
+            requestsLimitedUntil,
+            seekerVerified,
+            volunteerVerified,
+            seekerFormStatus,
+            volunteerFormStatus,
+            '',
+            salt,
+            passHash,
+            u.id,
+          ]
+          : [
+            deltaPoints,
+            finalStatus,
+            banUntil,
+            banReason,
+            chatLimitedUntil,
+            requestsLimitedUntil,
+            seekerVerified,
+            volunteerVerified,
+            seekerFormStatus,
+            volunteerFormStatus,
+            u.id,
+          ],
+        function (err) {
+          if (err) return fail(res, 500, 'Ошибка базы данных');
+          audit(req.user.id, 'admin_user_update', 'user', u.id, {
+            email,
+            pointsDelta: deltaPoints,
+            status: finalStatus,
+            punishmentType,
+            punishmentReason,
+            durationDays,
+            resetPoints,
+            seekerVerification,
+            volunteerVerification,
+            passwordReset: !!passHash,
+          });
+          ok(res, { ok: true, passwordReset: !!passHash });
+          if (passHash) persistUsersBackup();
+        }
+      );
+    };
+
+    if (newPassword.length >= 4) {
+      const salt = newSaltHex();
+      const passHash = hashPassword(newPassword, salt);
+      return applyUpdate(salt, passHash);
+    }
+    applyUpdate(null, null);
   });
 });
 
@@ -2558,7 +2779,16 @@ app.get('/api/admin/export', requireAdmin, (req, res) => {
 });
 
 // Проверка для Render / мониторинга
-app.get('/api/health', (req, res) => ok(res, { ok: true, service: 'voluntis-api' }));
+app.get('/api/health', (req, res) => {
+  db.get(`SELECT COUNT(*) AS userCount FROM users`, [], (err, row) => {
+    ok(res, {
+      ok: true,
+      service: 'voluntis-api',
+      userCount: err ? null : Number(row && row.userCount) || 0,
+      dbFile: path.basename(dbPath),
+    });
+  });
+});
 
 const PORT = Number(process.env.PORT) || 3000;
 // 0.0.0.0 — чтобы Render и другие хостинги принимали внешние подключения.
